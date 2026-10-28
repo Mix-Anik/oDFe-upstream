@@ -145,15 +145,35 @@ static int argcStore;
 
 void Cmd_AddCommand( const char *name, xcommand_t fn ) { (void)name; (void)fn; }
 
+/* words are separated by spaces; a word in double quotes can contain spaces (as in the engine's tokenizer) */
 void Cmd_TokenizeString( const char *text )
 {
-	char buf[1024];
-	char *tok;
-
 	argcStore = 0;
-	snprintf( buf, sizeof( buf ), "%s", text );
-	for ( tok = strtok( buf, " " ); tok && argcStore < 8; tok = strtok( NULL, " " ) ) {
-		snprintf( argvStore[argcStore++], sizeof( argvStore[0] ), "%s", tok );
+	while ( *text && argcStore < 8 ) {
+		char *out = argvStore[argcStore];
+		size_t n = 0;
+
+		while ( *text == ' ' ) {
+			text++;
+		}
+		if ( !*text ) {
+			break;
+		}
+		if ( *text == '"' ) {
+			text++;
+			while ( *text && *text != '"' && n < sizeof( argvStore[0] ) - 1 ) {
+				out[n++] = *text++;
+			}
+			if ( *text == '"' ) {
+				text++;
+			}
+		} else {
+			while ( *text && *text != ' ' && n < sizeof( argvStore[0] ) - 1 ) {
+				out[n++] = *text++;
+			}
+		}
+		out[n] = '\0';
+		argcStore++;
 	}
 }
 

@@ -237,6 +237,12 @@ typedef const odfPluginExport_t *( *odfPluginEntry_t )( const odfPluginImport_t 
 //      addr            the server address the client signed, "ip:port"
 //      ip              the client's address
 //
+// "chat_command"       a player's chat message ("say" or "say_team") starts with '!'. The game still gets the
+//                      message and shows it like any other. Not sent for bots, and not for messages that contain
+//                      control characters, a backslash, a double quote or a semicolon.
+//      client, serial  the slot and its connection counter
+//      text            the message, at most 200 characters, for example "!top vq3"
+//
 // "client_disconnect"  a player left.
 //      client, serial
 //

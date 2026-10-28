@@ -360,6 +360,68 @@ int main( int argc, char **argv )
 	CHECK( Mock_EventCount() == events, "an invalid event reached the plugin (%d more)", Mock_EventCount() - events );
 
 	// ------------------------------------------------------------------
+	printf( "chat commands\n" );
+	{
+		client_t *chatter = Connect( 4, "\\name\\Chatter\\cl_login\\0" );
+		static char longText[260];
+		static const struct {
+			const char *command;
+			const char *wantText;		/* NULL: no event */
+		} chat[] = {
+			{ "say \"!top vq3\"",				"!top vq3" },
+			{ "say \"!top\"",					"!top" },
+			{ "say_team \"!top st1 cpm\"",		"!top st1 cpm" },
+			{ "say !top vq3",					"!top vq3" },			/* the words arrive separately */
+			{ "SAY \"!top\"",					"!top" },
+			{ "say \"hello !top\"",				NULL },					/* not at the start */
+			{ "say \"top\"",					NULL },
+			{ "say",							NULL },
+			{ "vote \"!top\"",					NULL },					/* not chat */
+			{ "tell 1 \"!top\"",				NULL },
+			{ "say \"!top a\\b\"",				NULL },					/* characters an event cannot carry */
+			{ "say \"!top a;b\"",				NULL },
+			{ NULL, NULL }
+		};
+		int k;
+
+		chatter->state = CS_ACTIVE;
+		for ( k = 0; chat[k].command; k++ ) {
+			Mock_ClearLog();
+			Cmd_TokenizeString( chat[k].command );
+			SV_Plugin_ChatCommand( chatter );
+			if ( chat[k].wantText ) {
+				CHECK( Mock_EventCount() == 1 && !strcmp( Mock_EventName( 0 ), "chat_command" ), "'%s' did not reach the plugin", chat[k].command );
+				if ( Mock_EventCount() == 1 ) {
+					InfoValue( Mock_EventData( 0 ), "text", value, sizeof( value ) );
+					InfoValue( Mock_EventData( 0 ), "client", value2, sizeof( value2 ) );
+					CHECK( !strcmp( value, chat[k].wantText ) && !strcmp( value2, "4" ), "'%s' arrived as text '%s' client '%s'", chat[k].command, value, value2 );
+				}
+			} else {
+				CHECK( Mock_EventCount() == 0, "'%s' must not reach the plugin", chat[k].command );
+			}
+		}
+
+		memset( longText, 'a', sizeof( longText ) - 1 );
+		snprintf( value, sizeof( value ), "say \"!%s\"", longText );
+		Mock_ClearLog();
+		Cmd_TokenizeString( value );
+		SV_Plugin_ChatCommand( chatter );
+		CHECK( Mock_EventCount() == 0, "a chat command longer than 200 characters reached the plugin" );
+
+		/* clients that are not playing, and bots */
+		chatter->state = CS_PRIMED;
+		Mock_ClearLog();
+		Cmd_TokenizeString( "say \"!top\"" );
+		SV_Plugin_ChatCommand( chatter );
+		CHECK( Mock_EventCount() == 0, "a client that is not in the game got its chat command through" );
+		chatter->state = CS_ACTIVE;
+		chatter->netchan.remoteAddress.type = NA_BOT;
+		SV_Plugin_ChatCommand( chatter );
+		CHECK( Mock_EventCount() == 0, "a bot's chat command reached the plugin" );
+		chatter->netchan.remoteAddress.type = NA_IP;
+	}
+
+	// ------------------------------------------------------------------
 	printf( "plugin crash\n" );
 	Mock_Setup( ANSWER_LATER, ODF_AUTHRES_OK, 9, "late", NULL );
 	ClearOutput();

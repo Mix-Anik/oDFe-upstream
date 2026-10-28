@@ -566,6 +566,65 @@ void SV_Plugins_MapBegin( const char *mapname, int checksum )
 	SV_Plugin_Event( "map_begin", data );
 }
 
+#define CHAT_COMMAND_MAX	200
+
+/*
+===============
+SV_Plugin_ChatCommand
+
+Called for a client command on its way to the game. A chat message that starts with '!' ("!top vq3") is handed to the
+plugins as the event "chat_command"; the game still gets the message as usual. Messages with characters that an event
+cannot carry are not passed on.
+===============
+*/
+void SV_Plugin_ChatCommand( client_t *cl )
+{
+	char text[CHAT_COMMAND_MAX + 1];
+	char data[MAX_INFO_STRING] = "";
+	const char *cmd;
+	int i, len = 0;
+
+	if ( !numPlugins || cl->state != CS_ACTIVE || cl->netchan.remoteAddress.type == NA_BOT ) {
+		return;
+	}
+	cmd = Cmd_Argv( 0 );
+	if ( Q_stricmp( cmd, "say" ) && Q_stricmp( cmd, "say_team" ) ) {
+		return;
+	}
+	if ( Cmd_Argc() < 2 || Cmd_Argv( 1 )[0] != '!' ) {
+		return;
+	}
+
+	// the words of the message, joined by single spaces, as the game would read them
+	for ( i = 1; i < Cmd_Argc(); i++ ) {
+		const char *word = Cmd_Argv( i );
+		int n = (int)strlen( word );
+
+		if ( len + n + 1 > CHAT_COMMAND_MAX ) {
+			return;
+		}
+		if ( i > 1 ) {
+			text[len++] = ' ';
+		}
+		memcpy( text + len, word, n );
+		len += n;
+	}
+	text[len] = '\0';
+
+	for ( i = 0; i < len; i++ ) {
+		unsigned char c = (unsigned char)text[i];
+
+		if ( c < 0x20 || c == 0x7F || c == '\\' || c == '"' || c == ';' ) {
+			return;
+		}
+	}
+
+	Info_SetValueForKey( data, "client", va( "%i", (int)( cl - svs.clients ) ) );
+	Info_SetValueForKey( data, "serial", va( "%i", cl->auth.serial ) );
+	Info_SetValueForKey( data, "text", text );
+	SV_Plugin_Event( "chat_command", data );
+}
+
 qboolean SV_Plugins_HandleAuth( void )
 {
 	int i;

@@ -18,7 +18,7 @@ Every call into a plugin is guarded. If it crashes (access violation, `SIGSEGV`,
 
 ### Events
 
-Events are delivered to `OnEvent( name, data )`, `data` being a Quake info string (`\key\value\...`). Version 1 has `player_finish` (sent by the game module, see below), `auth_response`, `client_disconnect` and `map_begin`; the keys are listed in the header.
+Events are delivered to `OnEvent( name, data )`, `data` being a Quake info string (`\key\value\...`). Version 1 has `player_finish` (sent by the game module, see below), `auth_response`, `chat_command` (a chat message starting with `!`, still shown as chat), `client_disconnect` and `map_begin`; the keys are listed in the header.
 
 The game module raises events with the `trap_Event( name, data )` syscall. The number is found by name, so a mod works with engines that do not have it:
 

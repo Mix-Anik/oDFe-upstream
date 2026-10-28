@@ -454,6 +454,7 @@ void		SV_Plugins_Frame( void );
 void		SV_Plugin_Event( const char *name, const char *data );
 void		SV_Plugin_GameEvent( const char *name, const char *data );	// from the game module, validated here
 void		SV_Plugins_MapBegin( const char *mapname, int checksum );
+void		SV_Plugin_ChatCommand( client_t *cl );		// the client command being executed, if it is a chat message starting with '!'
 qboolean	SV_Plugins_HandleAuth( void );		// a running plugin answers login challenges
 // void		SV_Plugins_Shutdown( void );		in qcommon.h
 

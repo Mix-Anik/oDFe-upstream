@@ -2080,6 +2080,8 @@ qboolean SV_ExecuteClientCommand( client_t *cl, const char *s ) {
 	} else {
 		// pass unknown strings to the game
 		if ( !ucmd->name && sv.state == SS_GAME && cl->state >= CS_PRIMED ) {
+			// server plugins may answer chat commands ("!top")
+			SV_Plugin_ChatCommand( cl );
 			if ( gvm->forceDataMask )
 				Cmd_Args_Sanitize( "\n\r;" ); // handle ';' for OSP
 			else
