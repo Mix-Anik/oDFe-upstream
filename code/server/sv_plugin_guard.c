@@ -123,6 +123,8 @@ int PluginGuard_ModuleRange( void *handle, const void *symbol, pluginRange_t *ou
 // second time, from the handler, with the register values of the first pass.
 #if defined( __GNUC__ )
 __attribute__( ( noinline ) )
+#elif defined( _MSC_VER )
+__declspec( noinline )
 #endif
 int PluginGuard_Call( const pluginRange_t *range, pluginGuardFn_t fn, void *arg, pluginFault_t *fault )
 {
@@ -157,6 +159,10 @@ int PluginGuard_Available( void )
 
 #else // !_WIN32
 
+// Implemented for Linux only (dl_iterate_phdr and the register layout of ucontext_t are glibc/Linux things).
+// macOS, the BSDs and other systems get the fallback at the end: plugin calls are simply not guarded there.
+#if defined( __linux__ )
+
 #include <dlfcn.h>
 #include <link.h>
 #include <setjmp.h>
@@ -173,6 +179,8 @@ int PluginGuard_Available( void )
 #elif defined( __arm__ )
 #define GUARD_PC( uc )	( (uintptr_t)( (ucontext_t *)( uc ) )->uc_mcontext.arm_pc )
 #endif
+
+#endif // __linux__
 
 #ifdef GUARD_PC
 
@@ -345,7 +353,7 @@ int PluginGuard_Available( void )
 	return g.installed;
 }
 
-#else // no program counter access for this CPU
+#else // not Linux (or a CPU without program counter access): plugin calls are not guarded
 
 int PluginGuard_Init( void ) { return 0; }
 void PluginGuard_Shutdown( void ) {}

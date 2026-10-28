@@ -2,7 +2,7 @@
 
 ## Plugins
 
-The plugins that belong to the oDFe servers (online records, ...) are built in their own project, `defrag-plugins`, which carries a copy of the interface header and the shared build settings.
+The plugin for the oDFe servers (online records) is built in its own project, `df-records-plugin`, which carries a copy of the interface header and builds the Linux and Windows libraries.
 
 A plugin is a native shared library that the server loads at startup and that can react to events (a player finished a run, a client answered a login challenge, ...). The interface is the single self-contained header [`code/server/odf_plugin_api.h`](../code/server/odf_plugin_api.h); copy it into your plugin project.
 
@@ -14,7 +14,7 @@ A plugin is a native shared library that the server loads at startup and that ca
 
 ### Crash protection
 
-Every call into a plugin is guarded. If it crashes (access violation, `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL`) in the plugin's own module, the server logs the plugin, the kind of fault and the offset, stops that plugin for good (until the server restarts), ends the logins it was verifying, and keeps running. It is best effort: it does not cover faults in engine code or in libraries outside the plugin's module, memory corrupted before the crash, crashes in threads the plugin started, endless loops, `exit()`, or `abort()` on Windows. Linux/Unix support is written but has only been compiled, not run. On other platforms plugins run unguarded and the log says so.
+Every call into a plugin is guarded. If it crashes (access violation, `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL`) in the plugin's own module, the server logs the plugin, the kind of fault and the offset, stops that plugin for good (until the server restarts), ends the logins it was verifying, and keeps running. It is best effort: it does not cover faults in engine code or in libraries outside the plugin's module, memory corrupted before the crash, crashes in threads the plugin started, endless loops, `exit()`, or `abort()` on Windows. The guard exists for Windows and Linux (the Linux part is written but was not run when this was added). On other platforms, for example macOS, plugins run unguarded and the log says so.
 
 ### Events
 
