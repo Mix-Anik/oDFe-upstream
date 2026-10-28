@@ -1214,6 +1214,7 @@ qboolean CL_GameSwitch( void );
 //
 void SV_Init( void );
 void SV_Shutdown( const char *finalmsg );
+void SV_Plugins_Shutdown( void );		// when the program exits, not when a map ends
 void SV_Frame( int msec );
 void SV_TrackCvarChanges( void );
 void SV_PacketEvent( const netadr_t *from, msg_t *msg );

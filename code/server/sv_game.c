@@ -365,6 +365,12 @@ static qboolean SV_GetValue( char* value, int valueSize, const char* key )
 		return qtrue;
 	}
 
+	if ( !Q_stricmp( key, "trap_Event_ODF" ) )
+	{
+		Com_sprintf( value, valueSize, "%i", G_ODF_EVENT );
+		return qtrue;
+	}
+
 	return qfalse;
 }
 
@@ -985,6 +991,10 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case G_TRAP_GETVALUE:
 		VM_CHECKBOUNDS( gvm, args[1], args[2] );
 		return SV_GetValue( VMA(1), args[2], VMA(3) );
+
+	case G_ODF_EVENT:
+		SV_Plugin_GameEvent( VMA(1), VMA(2) );
+		return 0;
 
 	default:
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );

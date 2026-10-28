@@ -758,6 +758,7 @@ gotnewcl:
 	// this is the only place a client_t is ever initialized
 	// we got a newcl, so reset the reliableSequence and reliableAcknowledge
 	Com_Memset( newcl, 0, sizeof( *newcl ) );
+	SV_Auth_ClientConnect( newcl );
 	clientNum = newcl - svs.clients;
 #if 0 // skip this until CS_PRIMED
 	//ent = SV_GentityNum( clientNum );
@@ -875,6 +876,8 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	isBot = drop->netchan.remoteAddress.type == NA_BOT;
 
 	Q_strncpyz( name, drop->name, sizeof( name ) );	// for further DPrintf() because drop->name will be nuked in SV_SetUserinfo()
+
+	SV_Auth_ClientDropped( drop );
 
 	// Free all allocated data on the client structure
 	SV_FreeClient( drop );
@@ -1192,6 +1195,8 @@ void SV_ClientEnterWorld( client_t *client ) {
 
 	// call the game begin function
 	VM_Call( gvm, 1, GAME_CLIENT_BEGIN, clientNum );
+
+	SV_Auth_ClientEnterWorld( client );
 }
 
 
@@ -1785,6 +1790,8 @@ void SV_UserinfoChanged( client_t *cl, qboolean updateUserinfo, qboolean runFilt
 		return;
 	}
 
+	SV_Auth_UserinfoChanged( cl );
+
 	// rate command
 
 	// if the client is on the same subnet as the server and we aren't running an
@@ -1995,6 +2002,7 @@ static const ucmd_t ucmds[] = {
 	{"stopdl", SV_StopDownload_f},
 	{"donedl", SV_DoneDownload_f},
 	{"locations", SV_PrintLocations_f},
+	{"auth_response", SV_Auth_Response_f},
 
 	{NULL, NULL}
 };

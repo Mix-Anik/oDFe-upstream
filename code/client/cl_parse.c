@@ -804,6 +804,12 @@ static void CL_ParseCommandString( msg_t *msg ) {
 	Q_strncpyz( clc.serverCommands[ index ], s, sizeof( clc.serverCommands[ index ] ) );
 	clc.serverCommandsIgnore[ index ] = qfalse;
 
+	// login messages are for the engine only, the cgame never sees them
+	if ( CL_Auth_ServerCommand( s ) ) {
+		clc.serverCommandsIgnore[ index ] = qtrue;
+		return;
+	}
+
 #ifdef USE_CURL
 	if ( !clc.cURLUsed )
 #endif

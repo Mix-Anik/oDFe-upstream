@@ -1212,6 +1212,8 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 
 	cl_disconnecting = qtrue;
 
+	CL_Auth_Disconnected();
+
 	// Stop demo recording
 	if ( clc.demorecording ) {
 		CL_StopRecord_f();
@@ -4133,6 +4135,8 @@ void CL_Init( void ) {
 #endif
 	Cvar_Get( "cl_guid", "", CVAR_USERINFO | CVAR_ROM | CVAR_PROTECTED );
 	CL_UpdateGUID( NULL, 0 );
+
+	CL_Auth_Init();
 
 	Com_Printf( "----- Client Initialization Complete -----\n" );
 }

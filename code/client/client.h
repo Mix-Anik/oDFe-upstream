@@ -450,6 +450,11 @@ void CL_Disconnect_f( void );
 void CL_ReadDemoMessage( void );
 void CL_StopRecord_f( void );
 
+// cl_auth.c - key-pair login
+void CL_Auth_Init( void );
+qboolean CL_Auth_ServerCommand( const char *s );
+void CL_Auth_Disconnected( void );
+
 void CL_InitDownloads( void );
 void CL_NextDownload( void );
 

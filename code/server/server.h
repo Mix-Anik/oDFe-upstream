@@ -156,6 +156,19 @@ typedef enum {
 	GSA_ACKED		// gamestate acknowledged, no retansmissions needed
 } gameStateAck_t;
 
+// state of the key-pair login of a client, see sv_auth.c
+typedef struct {
+	int			state;				// ODF_AUTHSTATE_*
+	int			serial;				// number of this connection, so that late answers from a plugin are not applied to the next player in the slot
+	qboolean	wants;				// userinfo cl_login is set
+	byte		nonce[32];
+	int			challengeTime;		// svs.time the challenge was sent, 0 = none waiting for an answer
+	int			verifyTime;			// svs.time the answer was handed to the plugins, 0 = none being verified
+	int			lastChallengeTime;
+	int64_t		accountID;
+	char		accountName[33];
+} clientAuth_t;
+
 typedef struct client_s {
 	clientState_t	state;
 	char			userinfo[MAX_INFO_STRING];		// name, etc
@@ -230,6 +243,7 @@ typedef struct client_s {
 	char			tld[3]; // "XX\0"
 	const char		*country;
 
+	clientAuth_t	auth;
 } client_t;
 
 //=============================================================================
@@ -429,6 +443,33 @@ int BotImport_DebugPolygonCreate(int color, int numPoints, vec3_t *points);
 void BotImport_DebugPolygonDelete(int id);
 
 void SV_BotInitBotLib(void);
+
+//============================================================
+//
+// sv_plugin.c - native plugins, see odf_plugin_api.h
+//
+
+void		SV_Plugins_Init( void );
+void		SV_Plugins_Frame( void );
+void		SV_Plugin_Event( const char *name, const char *data );
+void		SV_Plugin_GameEvent( const char *name, const char *data );	// from the game module, validated here
+void		SV_Plugins_MapBegin( const char *mapname, int checksum );
+qboolean	SV_Plugins_HandleAuth( void );		// a running plugin answers login challenges
+// void		SV_Plugins_Shutdown( void );		in qcommon.h
+
+//
+// sv_auth.c - key-pair login of players
+//
+
+void		SV_Auth_ClientConnect( client_t *cl );
+void		SV_Auth_UserinfoChanged( client_t *cl );
+void		SV_Auth_ClientEnterWorld( client_t *cl );
+void		SV_Auth_ClientDropped( client_t *cl );
+void		SV_Auth_Response_f( client_t *cl );
+void		SV_Auth_Frame( void );
+void		SV_Auth_PluginStopped( void );
+void		SV_Auth_Result( int clientNum, int serial, int result, int64_t accountID, const char *accountName, const char *reason );
+qboolean	SV_Auth_ClientInfo( int clientNum, int *authState, int64_t *accountID, const char **accountName, int *serial );
 
 //============================================================
 //

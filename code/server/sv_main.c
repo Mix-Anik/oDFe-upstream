@@ -1550,6 +1550,9 @@ void SV_Frame( int msec ) {
 		return;
 	}
 
+	SV_Plugins_Frame();
+	SV_Auth_Frame();
+
 	// if it isn't time for the next frame, do nothing
 
 	frameMsec = (1000 / sv_fps->integer) * com_timescale->value;

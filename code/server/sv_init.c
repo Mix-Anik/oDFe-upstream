@@ -689,6 +689,8 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 
 	Com_Printf ("-----------------------------------\n");
 
+	SV_Plugins_MapBegin( mapname, checksum );
+
 	Sys_SetStatus( "Running map %s", mapname );
 
 	// suppress hitch warning
@@ -834,6 +836,8 @@ void SV_Init( void )
 	SV_TrackCvarChanges();
 
 	SV_InitChallenger();
+
+	SV_Plugins_Init();
 }
 
 

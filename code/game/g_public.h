@@ -398,7 +398,10 @@ typedef enum {
 
 	// engine extensions
 	G_CVAR_SETDESCRIPTION,
-	G_TRAP_GETVALUE = COM_TRAP_GETVALUE
+	G_TRAP_GETVALUE = COM_TRAP_GETVALUE,
+
+	// oDFe extensions, found by name with trap_GetValue
+	G_ODF_EVENT = 710		// void trap_Event( const char *name, const char *data ): hands an event to the server plugins
 
 } gameImport_t;
 

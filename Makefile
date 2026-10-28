@@ -1103,6 +1103,7 @@ Q3OBJ = \
   $(B)/client/cl_avi.o \
   $(B)/client/cl_tc_vis.o \
   $(B)/client/cl_jpeg.o \
+  $(B)/client/cl_auth.o \
   \
   $(B)/client/cm_load.o \
   $(B)/client/cm_patch.o \
@@ -1123,6 +1124,9 @@ Q3OBJ = \
   $(B)/client/net_ip.o \
   $(B)/client/huffman.o \
   $(B)/client/huffman_static.o \
+  $(B)/client/auth_proto.o \
+  $(B)/client/monocypher.o \
+  $(B)/client/monocypher-ed25519.o \
   \
   $(B)/client/snd_adpcm.o \
   $(B)/client/snd_dma.o \
@@ -1137,11 +1141,14 @@ Q3OBJ = \
   $(B)/client/sv_bot.o \
   $(B)/client/sv_ccmds.o \
   $(B)/client/sv_client.o \
+  $(B)/client/sv_auth.o \
   $(B)/client/sv_filter.o \
   $(B)/client/sv_game.o \
   $(B)/client/sv_init.o \
   $(B)/client/sv_main.o \
   $(B)/client/sv_net_chan.o \
+  $(B)/client/sv_plugin.o \
+  $(B)/client/sv_plugin_guard.o \
   $(B)/client/sv_snapshot.o \
   $(B)/client/sv_world.o \
   \
@@ -1339,6 +1346,7 @@ $(B)/$(TARGET_RENDV): $(Q3RENDVOBJ)
 #############################################################################
 
 Q3DOBJ = \
+  $(B)/ded/sv_auth.o \
   $(B)/ded/sv_bot.o \
   $(B)/ded/sv_client.o \
   $(B)/ded/sv_ccmds.o \
@@ -1347,6 +1355,8 @@ Q3DOBJ = \
   $(B)/ded/sv_init.o \
   $(B)/ded/sv_main.o \
   $(B)/ded/sv_net_chan.o \
+  $(B)/ded/sv_plugin.o \
+  $(B)/ded/sv_plugin_guard.o \
   $(B)/ded/sv_snapshot.o \
   $(B)/ded/sv_world.o \
   \
@@ -1368,6 +1378,9 @@ Q3DOBJ = \
   $(B)/ded/net_ip.o \
   $(B)/ded/huffman.o \
   $(B)/ded/huffman_static.o \
+  $(B)/ded/auth_proto.o \
+  $(B)/ded/monocypher.o \
+  $(B)/ded/monocypher-ed25519.o \
   \
   $(B)/ded/q_math.o \
   $(B)/ded/q_shared.o \
