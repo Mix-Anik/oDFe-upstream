@@ -920,6 +920,81 @@ const char *Sys_DefaultBasePath( void )
 
 /*
 =================
+Sys_ReplaceExecutable
+
+Puts a downloaded executable in place of the running one (engine updater): written next to it, then renamed over it, which
+a running program survives on Linux. Returns NULL, or the reason it failed.
+=================
+*/
+const char *Sys_ReplaceExecutable( const void *data, int len )
+{
+#ifdef __linux__
+	char exe[ PATH_MAX ], tmp[ PATH_MAX + 8 ];
+	const char *p = (const char *)data;
+	int fd, n;
+
+	if ( len < 4 || memcmp( data, "\x7f" "ELF", 4 ) ) {
+		return "the downloaded file is not an executable";
+	}
+	n = readlink( "/proc/self/exe", exe, sizeof( exe ) - 1 );
+	if ( n < 1 ) {
+		return "cannot find the executable";
+	}
+	exe[ n ] = '\0';
+	Com_sprintf( tmp, sizeof( tmp ), "%s.new", exe );
+
+	fd = open( tmp, O_WRONLY | O_CREAT | O_TRUNC, 0755 );
+	if ( fd < 0 ) {
+		return "cannot write next to the executable (is the folder writable?)";
+	}
+	while ( len > 0 ) {
+		ssize_t w = write( fd, p, len );
+		if ( w <= 0 ) {
+			close( fd );
+			unlink( tmp );
+			return "cannot write the new executable (disk full?)";
+		}
+		p += w;
+		len -= (int)w;
+	}
+	if ( fchmod( fd, 0755 ) || fsync( fd ) ) {
+		close( fd );
+		unlink( tmp );
+		return "cannot write the new executable";
+	}
+	if ( close( fd ) || rename( tmp, exe ) ) {
+		unlink( tmp );
+		return "cannot replace the executable";
+	}
+	return NULL;
+#else
+	return "this platform cannot update the executable";
+#endif
+}
+
+
+/*
+=================
+Sys_CleanupExecutableUpdate
+=================
+*/
+void Sys_CleanupExecutableUpdate( void )
+{
+#ifdef __linux__
+	char exe[ PATH_MAX ], tmp[ PATH_MAX + 8 ];
+	int n = readlink( "/proc/self/exe", exe, sizeof( exe ) - 1 );
+
+	if ( n > 0 ) {
+		exe[ n ] = '\0';
+		Com_sprintf( tmp, sizeof( tmp ), "%s.new", exe );
+		unlink( tmp );
+	}
+#endif
+}
+
+
+/*
+=================
 Sys_BinName
 
 This resolves any symlinks to the binary. It's disabled for debug
