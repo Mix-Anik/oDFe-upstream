@@ -367,6 +367,8 @@ extern	qboolean	cl_oldGameSet;
 #ifdef USE_CURL
 
 extern		download_t	download;
+qboolean	Com_DL_Init( download_t *dl );
+void		Com_DL_Done( download_t *dl );
 qboolean	Com_DL_Perform( download_t *dl );
 void		Com_DL_Cleanup( download_t *dl );
 qboolean	Com_DL_Begin( download_t *dl, const char *localName, const char *remoteURL, qboolean autoDownload );
@@ -458,6 +460,11 @@ void CL_Auth_Disconnected( void );
 // cl_plugin.c - native client plugins (odf_client_plugin_api.h)
 void CL_Plugins_Init( void );
 void CL_Plugins_Shutdown( void );
+
+// cl_update.c: oDFs mod updater
+void CL_Update_Init( void );
+void CL_Update_Frame( void );
+void CL_Update_Shutdown( void );
 void CL_Plugins_MapLoad( const char *mapName );
 void CL_Plugins_CGameShutdown( void );
 void CL_Plugins_SetPlayerState( const playerState_t *ps, int viewFlags );

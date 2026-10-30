@@ -277,6 +277,7 @@
     <ClCompile Include="..\..\client\cl_avi.c" />
     <ClCompile Include="..\..\client\cl_auth.c" />
     <ClCompile Include="..\..\client\cl_plugin.c" />
+    <ClCompile Include="..\..\client\cl_update.c" />
     <ClCompile Include="..\..\client\cl_cgame.c" />
     <ClCompile Include="..\..\client\cl_cin.c" />
     <ClCompile Include="..\..\client\cl_console.c" />

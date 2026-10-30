@@ -4874,6 +4874,143 @@ qboolean FS_IsPureChecksum( int sum )
 
 /*
 ================
+FS_WriteUpdatePak
+
+Stores a downloaded oDFs mod pk3 as UPD_PAK_NAME.new in the folder of the pk3 that is loaded now (the home path game
+folder if there is none). It is swapped in by FS_ApplyPendingUpdate() at the next start, while no pk3 is open.
+================
+*/
+qboolean FS_WriteUpdatePak( const void *data, int len ) {
+	char dir[MAX_OSPATH], tmp[MAX_OSPATH], dst[MAX_OSPATH];
+	const searchpath_t *sp;
+	const char *slash;
+	FILE *f;
+
+	Q_strncpyz( dir, FS_BuildOSPath( fs_homepath->string, fs_gamedir, NULL ), sizeof( dir ) );
+	for ( sp = fs_searchpaths; sp; sp = sp->next ) {
+		if ( sp->pack && Q_stristr( sp->pack->pakBasename, "defrag_vm" ) ) {
+			Q_strncpyz( dir, sp->pack->pakFilename, sizeof( dir ) );
+			slash = strrchr( dir, '/' );
+			if ( strrchr( dir, '\\' ) > slash ) {
+				slash = strrchr( dir, '\\' );
+			}
+			if ( slash ) {
+				dir[slash - dir] = '\0';
+			}
+			break;
+		}
+	}
+
+	Com_sprintf( tmp, sizeof( tmp ), "%s%c%s.tmp", dir, PATH_SEP, UPD_PAK_NAME );
+	Com_sprintf( dst, sizeof( dst ), "%s%c%s.new", dir, PATH_SEP, UPD_PAK_NAME );
+
+	FS_CreatePath( tmp );
+	f = Sys_FOpen( tmp, "wb" );
+	if ( !f ) {
+		Com_Printf( S_COLOR_RED "cannot write %s\n", tmp );
+		return qfalse;
+	}
+	if ( fwrite( data, 1, len, f ) != (size_t)len ) {
+		fclose( f );
+		remove( tmp );
+		Com_Printf( S_COLOR_RED "short write to %s\n", tmp );
+		return qfalse;
+	}
+	if ( fclose( f ) != 0 ) {
+		remove( tmp );
+		return qfalse;
+	}
+
+	remove( dst );
+	if ( rename( tmp, dst ) ) {
+		remove( tmp );
+		Com_Printf( S_COLOR_RED "cannot rename %s\n", tmp );
+		return qfalse;
+	}
+	Com_Printf( "update stored as %s\n", dst );
+	return qtrue;
+}
+
+
+// base/game/UPD_PAK_NAME.new -> base/game/UPD_PAK_NAME, older zz*defrag_vm*.pk3 of that folder removed
+static void FS_ApplyUpdateIn( const char *base, const char *game ) {
+	char newPath[MAX_OSPATH], pakPath[MAX_OSPATH], dir[MAX_OSPATH], path[MAX_OSPATH];
+	qboolean failed = qfalse;
+	char **list;
+	int i, n = 0;
+	FILE *f;
+
+	Q_strncpyz( newPath, FS_BuildOSPath( base, game, UPD_PAK_NAME ".new" ), sizeof( newPath ) );
+	f = Sys_FOpen( newPath, "rb" );
+	if ( !f ) {
+		return;
+	}
+	fclose( f );
+
+	Q_strncpyz( pakPath, FS_BuildOSPath( base, game, UPD_PAK_NAME ), sizeof( pakPath ) );
+	Q_strncpyz( dir, FS_BuildOSPath( base, game, NULL ), sizeof( dir ) );
+
+	list = Sys_ListFiles( dir, ".pk3", NULL, &n, qfalse );
+	for ( i = 0; i < n; i++ ) {
+		if ( Q_stricmpn( list[i], "zz", 2 ) || !Q_stristr( list[i], "defrag_vm" ) ) {
+			continue;
+		}
+		Q_strncpyz( path, FS_BuildOSPath( base, game, list[i] ), sizeof( path ) );
+		remove( path );
+		f = Sys_FOpen( path, "rb" );
+		if ( f ) {
+			fclose( f );
+			failed = qtrue;
+			Com_Printf( S_COLOR_YELLOW "mod update: cannot remove %s\n", path );
+		}
+	}
+	if ( list ) {
+		Sys_FreeFileList( list );
+	}
+	if ( failed ) {
+		Com_Printf( S_COLOR_YELLOW "mod update: not installed, will try again at the next start\n" );
+		return;
+	}
+
+	if ( rename( newPath, pakPath ) ) {
+		FS_CopyFile( newPath, pakPath );
+		remove( newPath );
+	}
+	Com_Printf( "mod update installed: %s\n", pakPath );
+}
+
+
+// once per run, before any pk3 is opened
+static void FS_ApplyPendingUpdate( void ) {
+	static qboolean done;
+	const char *bases[2];
+	int i, j;
+
+	if ( done ) {
+		return;
+	}
+	done = qtrue;
+
+	bases[0] = fs_basepath->string;
+	bases[1] = Q_stricmp( fs_homepath->string, fs_basepath->string ) ? fs_homepath->string : "";
+	for ( i = 0; i < 2; i++ ) {
+		if ( !bases[i][0] ) {
+			continue;
+		}
+		for ( j = 0; j < basegame_cnt; j++ ) {
+			if ( basegames[j][0] ) {
+				FS_ApplyUpdateIn( bases[i], basegames[j] );
+			}
+		}
+		if ( fs_gamedirvar->string[0] ) {
+			FS_ApplyUpdateIn( bases[i], fs_gamedirvar->string );
+		}
+	}
+}
+
+
+/*
+================
 FS_Startup
 ================
 */
@@ -4942,6 +5079,8 @@ static void FS_Startup( void ) {
 	Cvar_SetDescription( fs_excludeReference,
 		"Exclude specified pak files from download list on client side.\n"
 		"Format is <moddir>/<pakname> (without .pk3 suffix), you may list multiple entries separated by space." );
+
+	FS_ApplyPendingUpdate();
 
 	start = Sys_Milliseconds();
 

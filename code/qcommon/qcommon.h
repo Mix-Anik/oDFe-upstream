@@ -754,6 +754,9 @@ qboolean FS_SV_FileExists( const char *file );
 fileHandle_t FS_SV_FOpenFileWrite( const char *filename );
 int		FS_SV_FOpenFileRead( const char *filename, fileHandle_t *fp );
 void	FS_SV_Rename( const char *from, const char *to );
+// the oDFs mod pk3 as it is released; an update waits next to the installed one as UPD_PAK_NAME ".new"
+#define UPD_PAK_NAME "zzz-defrag_vm.pk3"
+qboolean FS_WriteUpdatePak( const void *data, int len );
 int		FS_FOpenFileRead( const char *qpath, fileHandle_t *file, qboolean uniqueFILE );
 // if uniqueFILE is true, then a new FILE will be fopened even if the file
 // is found in an already open pak file.  If uniqueFILE is false, you must call

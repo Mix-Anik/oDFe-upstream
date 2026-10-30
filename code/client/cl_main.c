@@ -2994,6 +2994,8 @@ void CL_Frame( int msec, int realMsec ) {
 	}
 #endif
 
+	CL_Update_Frame();
+
 	if ( !com_cl_running->integer ) {
 		return;
 	}
@@ -4138,6 +4140,7 @@ void CL_Init( void ) {
 
 	CL_Auth_Init();
 	CL_Plugins_Init();
+	CL_Update_Init();
 
 	Com_Printf( "----- Client Initialization Complete -----\n" );
 }
@@ -4174,6 +4177,7 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 	CL_ShutdownVMs();
 
 	CL_Plugins_Shutdown();
+	CL_Update_Shutdown();
 
 	CL_ShutdownRef( quit ? REF_UNLOAD_DLL : REF_DESTROY_WINDOW );
 

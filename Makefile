@@ -481,7 +481,8 @@ ifdef MINGW
     else
       CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib64
     endif
-    CLIENT_LDFLAGS += -lcurl -lz -lcrypt32
+    # TEMP local fix: link zlib statically to avoid the zlib1.dll dependency
+    CLIENT_LDFLAGS += -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32
   endif
 
   ifeq ($(USE_PCRE2),1)
@@ -1105,6 +1106,7 @@ Q3OBJ = \
   $(B)/client/cl_jpeg.o \
   $(B)/client/cl_auth.o \
   $(B)/client/cl_plugin.o \
+  $(B)/client/cl_update.o \
   \
   $(B)/client/cm_load.o \
   $(B)/client/cm_patch.o \

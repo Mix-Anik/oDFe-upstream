@@ -72,6 +72,14 @@ The client signs `"authv1" || nonce (32 bytes) || server address` where the addr
 
 The server messages are handled by the engine and never reach the cgame.
 
+## Mod updater
+
+`cl_update.c` lets the oDFs main menu update `zzz-defrag_vm.pk3` (the menu part lives in oDFs `ui_menu.c`). It only talks to `https://api.github.com/repos/<odfs_update_repo>/releases/latest` and `https://github.com/<odfs_update_repo>/releases/download/<tag>/zzz-defrag_vm.pk3[.sha512]`; the repository is the startup-only cvar `odfs_update_repo` (default `Mix-Anik/oDFs`), the tag must be `vMAJOR.MINOR.PATCH` and the file name is fixed.
+
+* `odfs_checkupdate <installed version number> [auto]` asks for the latest release (`auto` is skipped when `odfs_update_check` is 0). `odfs_update` downloads it, checks the SHA-512 from the release's `.sha512` file and the pk3 signature, and leaves it as `zzz-defrag_vm.pk3.new` next to the loaded mod pk3.
+* Results for menus, all read only: `odfs_update_state` (empty, `checking`, `uptodate`, `available`, `downloading`, `ready`, `error`, `checkfailed`; a failed check, for example no release yet or no network, is meant to stay invisible), `odfs_update_latest` (`2.1.0`), `odfs_update_latest_num` (`20100`), `odfs_update_progress` (0-100), `odfs_update_error`.
+* The swap happens at the next start, before any pk3 is opened (a loaded pk3 is locked on Windows): older `zz*defrag_vm*.pk3` files of that folder are removed and the `.new` file becomes `zzz-defrag_vm.pk3`. If an old file cannot be removed the `.new` file stays and is tried again at the following start.
+
 ## Tests
 
 Native tests, no game needed (MSYS2 MinGW64 or any gcc):
