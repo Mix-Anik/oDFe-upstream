@@ -2051,7 +2051,9 @@ qboolean SV_ExecuteClientCommand( client_t *cl, const char *s ) {
 	for ( ucmd = ucmds; ucmd->name; ucmd++ ) {
 		if ( !strcmp( Cmd_Argv(0), ucmd->name ) ) {
 			if ( ucmd->func == SV_UpdateUserinfo_f ) {
-				if ( bFloodProtect ) {
+				// the local client is trusted: every map_restart may legitimately change userinfo, and dropping its packets
+				// (usercmds included) until the limiter recovers freezes the player for seconds
+				if ( bFloodProtect && cl->netchan.remoteAddress.type != NA_LOOPBACK ) {
 					if ( SVC_RateLimit( &cl->info_rate, 5, 1000 ) ) {
 						return qfalse; // lag flooder
 					}

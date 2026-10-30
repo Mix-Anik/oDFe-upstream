@@ -300,12 +300,6 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 		cl.snapshots[ ( oldMessageNum + i ) & PACKET_MASK ].valid = qfalse;
 	}
 
-	// a map_restart moves the server clock ahead of the client's by a few hundred ms; the server discards usercmds older than that,
-	// and the gradual time delta adjustment can't keep up with frequent restarts (connection interrupted), so resync right away
-	if ( cl.snap.valid && ( ( newSnap.snapFlags ^ cl.snap.snapFlags ) & SNAPFLAG_SERVERCOUNT ) ) {
-		cl.timeReset = qtrue;
-	}
-
 	// copy to the current good spot
 	cl.snap = newSnap;
 	cl.snap.ping = 999;

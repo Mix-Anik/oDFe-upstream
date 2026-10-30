@@ -103,7 +103,6 @@ typedef struct {
 	qboolean	extrapolatedSnapshot;	// set if any cgame frame has been forced to extrapolate
 									// cleared when CL_AdjustTimeDelta looks at it
 	qboolean	newSnapshots;		// set on parse of any valid packet
-	qboolean	timeReset;			// the snapshot flipped SNAPFLAG_SERVERCOUNT (map_restart): resync the clock at once
 
 	gameState_t	gameState;			// configstrings
 	char		mapname[MAX_QPATH];	// extracted from CS_SERVERINFO
@@ -535,6 +534,11 @@ void Con_PageDown( int lines );
 void Con_Top( void );
 void Con_Bottom( void );
 void Con_Close( void );
+qboolean Con_SelectEnabled( void );
+void Con_ClearSelection( void );
+qboolean Con_CopySelection( void );
+void Con_MouseDown( void );
+void Con_MouseUp( void );
 
 void CL_LoadConsoleHistory( void );
 void CL_SaveConsoleHistory( void );
