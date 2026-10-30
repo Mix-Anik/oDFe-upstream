@@ -4137,6 +4137,7 @@ void CL_Init( void ) {
 	CL_UpdateGUID( NULL, 0 );
 
 	CL_Auth_Init();
+	CL_Plugins_Init();
 
 	Com_Printf( "----- Client Initialization Complete -----\n" );
 }
@@ -4171,6 +4172,8 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 	S_DisableSounds();
 
 	CL_ShutdownVMs();
+
+	CL_Plugins_Shutdown();
 
 	CL_ShutdownRef( quit ? REF_UNLOAD_DLL : REF_DESTROY_WINDOW );
 

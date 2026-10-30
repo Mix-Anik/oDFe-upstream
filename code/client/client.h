@@ -455,6 +455,17 @@ void CL_Auth_Init( void );
 qboolean CL_Auth_ServerCommand( const char *s );
 void CL_Auth_Disconnected( void );
 
+// cl_plugin.c - native client plugins (odf_client_plugin_api.h)
+void CL_Plugins_Init( void );
+void CL_Plugins_Shutdown( void );
+void CL_Plugins_MapLoad( const char *mapName );
+void CL_Plugins_CGameShutdown( void );
+void CL_Plugins_SetPlayerState( const playerState_t *ps, int viewFlags );
+qboolean CL_Plugins_FilterSound( int entityNum, qboolean isLoop );
+void CL_Plugins_BeforeScene( const refdef_t *fd );
+void CL_Plugins_AfterScene( const refdef_t *fd );
+void CL_Plugins_AfterFrame( void );
+
 void CL_InitDownloads( void );
 void CL_NextDownload( void );
 

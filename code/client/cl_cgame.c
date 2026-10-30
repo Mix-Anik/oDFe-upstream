@@ -369,6 +369,7 @@ static void CL_CM_LoadMap( const char *mapname ) {
 
 	CM_LoadMap( mapname, qtrue, &checksum );
 	tc_vis_init();
+	CL_Plugins_MapLoad( mapname );
 }
 
 
@@ -388,6 +389,8 @@ void CL_ShutdownCGame( void ) {
 	}
 
 	re.VertexLighting( qfalse );
+
+	CL_Plugins_CGameShutdown();
 
 	VM_Call( cgvm, 0, CG_SHUTDOWN );
 	VM_Free( cgvm );
@@ -439,6 +442,11 @@ static qboolean CL_GetValue( char* value, int valueSize, const char* key ) {
 
 	if ( !Q_stricmp( key, "trap_Cvar_SetDescription_Q3E" ) ) {
 		Com_sprintf( value, valueSize, "%i", CG_CVAR_SETDESCRIPTION );
+		return qtrue;
+	}
+
+	if ( !Q_stricmp( key, "trap_ODF_SetPlayerState" ) ) {
+		Com_sprintf( value, valueSize, "%i", CG_ODF_SET_PLAYERSTATE );
 		return qtrue;
 	}
 
@@ -573,7 +581,9 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		VM_CHECKBOUNDS3( cgvm, args[7], args[6], sizeof( markFragment_t ) );
 		return re.MarkFragments( args[1], VMA(2), VMA(3), args[4], VMA(5), args[6], VMA(7) );
 	case CG_S_STARTSOUND:
-		S_StartSound( VMA(1), args[2], args[3], args[4] );
+		if ( !CL_Plugins_FilterSound( args[2], qfalse ) ) {
+			S_StartSound( VMA(1), args[2], args[3], args[4] );
+		}
 		return 0;
 	case CG_S_STARTLOCALSOUND:
 		S_StartLocalSound( args[1], args[2] );
@@ -582,7 +592,9 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		S_ClearLoopingSounds(args[1]);
 		return 0;
 	case CG_S_ADDLOOPINGSOUND:
-		S_AddLoopingSound( args[1], VMA(2), VMA(3), args[4] );
+		if ( !CL_Plugins_FilterSound( args[1], qtrue ) ) {
+			S_AddLoopingSound( args[1], VMA(2), VMA(3), args[4] );
+		}
 		return 0;
 	case CG_S_ADDREALLOOPINGSOUND:
 		S_AddRealLoopingSound( args[1], VMA(2), VMA(3), args[4] );
@@ -637,7 +649,9 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return 0;
 	case CG_R_RENDERSCENE:
 	    tc_vis_render();
+		CL_Plugins_BeforeScene( VMA(1) );
 		re.RenderScene( VMA(1) );
+		CL_Plugins_AfterScene( VMA(1) );
 		return 0;
 	case CG_R_SETCOLOR:
 		re.SetColor( VMA(1) );
@@ -805,6 +819,11 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		VM_CHECKBOUNDS( cgvm, args[1], args[2] );
 		return CL_GetValue( VMA(1), args[2], VMA(3) );
 
+	case CG_ODF_SET_PLAYERSTATE:
+		VM_CHECKBOUNDS( cgvm, args[1], sizeof( playerState_t ) );
+		CL_Plugins_SetPlayerState( VMA(1), args[2] );
+		return 0;
+
 	default:
 		Com_Error( ERR_DROP, "Bad cgame system trap: %ld", (long int) args[0] );
 	}
@@ -943,6 +962,7 @@ CL_CGameRendering
 */
 void CL_CGameRendering( stereoFrame_t stereo ) {
 	VM_Call( cgvm, 3, CG_DRAW_ACTIVE_FRAME, cl.serverTime, stereo, clc.demoplaying );
+	CL_Plugins_AfterFrame();
 #ifdef DEBUG
 	VM_Debug( 0 );
 #endif

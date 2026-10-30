@@ -756,6 +756,17 @@ static cmd_function_t *Cmd_FindCommand( const char *cmd_name )
 
 /*
 ============
+Cmd_CommandExists
+============
+*/
+qboolean Cmd_CommandExists( const char *cmd_name )
+{
+	return Cmd_FindCommand( cmd_name ) ? qtrue : qfalse;
+}
+
+
+/*
+============
 Cmd_AddCommand
 ============
 */

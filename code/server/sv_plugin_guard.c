@@ -25,6 +25,7 @@ typedef struct {
 	pluginRange_t	range;
 	pluginFault_t	fault;
 	int				installed;
+	int				refs;		// PluginGuard_Init calls without a PluginGuard_Shutdown yet (server and client plugins share it)
 } guardState_t;
 
 static guardState_t g;
@@ -89,12 +90,16 @@ int PluginGuard_Init( void )
 		g_handler = AddVectoredExceptionHandler( 1, GuardHandler );
 		g.installed = g_handler != NULL;
 	}
+	if ( g.installed ) {
+		g.refs++;
+	}
 	return g.installed;
 }
 
 void PluginGuard_Shutdown( void )
 {
-	if ( g.installed ) {
+	if ( g.installed && --g.refs <= 0 ) {
+		g.refs = 0;
 		RemoveVectoredExceptionHandler( g_handler );
 		g_handler = NULL;
 		g.installed = 0;
@@ -234,6 +239,7 @@ int PluginGuard_Init( void )
 	int i;
 
 	if ( g.installed ) {
+		g.refs++;
 		return 1;
 	}
 
@@ -253,6 +259,7 @@ int PluginGuard_Init( void )
 		sigaction( guardSignals[i], &sa, &g_old[i] );
 	}
 	g.installed = 1;
+	g.refs = 1;
 	return 1;
 }
 
@@ -260,9 +267,10 @@ void PluginGuard_Shutdown( void )
 {
 	int i;
 
-	if ( !g.installed ) {
+	if ( !g.installed || --g.refs > 0 ) {
 		return;
 	}
+	g.refs = 0;
 	for ( i = 0; i < NUM_GUARD_SIGNALS; i++ ) {
 		sigaction( guardSignals[i], &g_old[i], NULL );
 	}

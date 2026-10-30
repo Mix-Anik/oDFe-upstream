@@ -121,6 +121,13 @@ int main( int argc, char **argv )
 	CHECK( !PluginGuard_Available(), "still available after shutdown" );
 	CHECK( PluginGuard_Init(), "cannot install again" );
 
+	// server and client plugins share the guard: it stays until the last user is done
+	CHECK( PluginGuard_Init(), "second user cannot install" );
+	PluginGuard_Shutdown();
+	CHECK( PluginGuard_Available(), "removed while another user still has it" );
+	PluginGuard_Shutdown();
+	CHECK( !PluginGuard_Available(), "still available after the last shutdown" );
+
 	printf( failures ? "FAILED: %d check(s)\n" : "all guard checks passed\n", failures );
 	return failures ? 1 : 0;
 }
