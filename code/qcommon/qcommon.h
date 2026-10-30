@@ -1279,6 +1279,8 @@ char	*Sys_ConsoleInput( void );
 void	NORETURN FORMAT_PRINTF(1, 2) QDECL Sys_Error( const char *error, ... );
 void	NORETURN Sys_Quit( void );
 char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
+void	Sys_SetClipboardText( const char *text );
+qboolean IN_GetCursorPos( int *x, int *y );	// system cursor in window pixels, qfalse if the cursor is not available
 void	Sys_SetClipboardBitmap( const byte *bitmap, int length );
 
 void	Sys_Print( const char *msg );

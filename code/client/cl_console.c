@@ -91,6 +91,31 @@ static qboolean con_timedisplay_show = qfalse;
 
 int			g_console_field_width;
 
+// mouse text selection
+cvar_t		*con_select;
+cvar_t		*con_selectCopy;
+
+typedef struct {
+	int		line;	// absolute line number, same space as con.current
+	int		col;
+} conPos_t;
+
+static struct {
+	qboolean	active;			// there is a non-empty selection
+	qboolean	dragging;		// left mouse button is held
+	conPos_t	anchor;
+	conPos_t	head;
+	int			scrollTime;
+
+	// text layout of the last drawn frame, used for hit testing
+	qboolean	layoutValid;
+	int			y0;				// y of the bottom visible text row
+	int			row0;			// line drawn at y0
+	int			rows;
+} consel;
+
+static const vec4_t con_selColor = { 0.25f, 0.45f, 0.85f, 0.55f };
+
 #ifdef USE_PCRE2
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
@@ -230,6 +255,8 @@ void Con_ToggleConsole_f( void ) {
 		Field_Clear( &g_consoleField );
 	}
 
+	Con_ClearSelection();
+
 	Con_ResetFieldWidth();
 
 	if (!con_notifykeep->integer) {
@@ -334,6 +361,8 @@ static void Con_Clear_f( void ) {
 	con.current = 0;
 	con.carriageReturn = qfalse;
 	con.newline = qtrue;
+
+	Con_ClearSelection();
 
 	Con_Bottom();		// go to end
 }
@@ -520,6 +549,7 @@ void Con_CheckResize( void )
 		}
 
 		Con_ClearNotify();
+		Con_ClearSelection();
 
 		con.current = numlines - 1;
 	}
@@ -612,6 +642,12 @@ void Con_Init( void )
 	con_scale = Cvar_Get( "con_scale", "1", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( con_scale, "0.5", "8", CV_FLOAT );
 	Cvar_SetDescription( con_scale, "Console font size scale." );
+	con_select = Cvar_Get( "con_select", "1", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( con_select, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( con_select, "Enable/disable selecting console text with the mouse (shows the cursor while the console is open)." );
+	con_selectCopy = Cvar_Get( "con_selectCopy", "1", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( con_selectCopy, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( con_selectCopy, "Copy selected console text to the clipboard when the mouse button is released (Ctrl+C always copies)." );
 
 	Field_Clear( &g_consoleField );
 	Con_ResetFieldWidth();
@@ -905,6 +941,344 @@ void CL_ConsolePrint( const char *txt ) {
 /*
 ==============================================================================
 
+MOUSE TEXT SELECTION
+
+==============================================================================
+*/
+
+/*
+================
+Con_SelectEnabled
+
+Used by the input code to decide whether the system cursor
+should be available while the console is open
+================
+*/
+qboolean Con_SelectEnabled( void ) {
+	return con_select && con_select->integer ? qtrue : qfalse;
+}
+
+
+/*
+================
+Con_ClearSelection
+================
+*/
+void Con_ClearSelection( void ) {
+	consel.active = qfalse;
+	consel.dragging = qfalse;
+}
+
+
+static qboolean Con_LineValid( int line ) {
+	return line >= 0 && line <= con.current && con.current - line < con.totallines;
+}
+
+
+static const short *Con_LineText( int line ) {
+	return con.text + ( line % con.totallines ) * con.linewidth;
+}
+
+
+/*
+================
+Con_LinePrefix
+
+Returns the length of the "hh:mm:ss " timestamp at the start of the line, or 0
+================
+*/
+static int Con_LinePrefix( const short *text ) {
+	int i, ch;
+
+	if ( con.linewidth <= sizeof( con.prefix ) ) {
+		return 0;
+	}
+
+	for ( i = 0; i < sizeof( con.prefix ) - 1; i++ ) {
+		if ( ( ( text[i] >> 8 ) & 63 ) != 9 ) {
+			return 0;
+		}
+		ch = text[i] & 0xff;
+		if ( i == 2 || i == 5 ) {
+			if ( ch != ':' )
+				return 0;
+		} else if ( ch < '0' || ch > '9' ) {
+			return 0;
+		}
+	}
+
+	return ( text[i] & 0xff ) == ' ' ? sizeof( con.prefix ) : 0;
+}
+
+
+// number of cells up to and including the last non-blank character
+static int Con_LineLength( const short *text ) {
+	int len;
+
+	for ( len = con.linewidth; len > 0; len-- ) {
+		if ( ( text[len - 1] & 0xff ) != ' ' )
+			break;
+	}
+	return len;
+}
+
+
+static int Con_PosCompare( const conPos_t *a, const conPos_t *b ) {
+	if ( a->line != b->line )
+		return a->line < b->line ? -1 : 1;
+	if ( a->col != b->col )
+		return a->col < b->col ? -1 : 1;
+	return 0;
+}
+
+
+static void Con_SelectionBounds( conPos_t *s, conPos_t *e ) {
+	if ( Con_PosCompare( &consel.anchor, &consel.head ) <= 0 ) {
+		*s = consel.anchor;
+		*e = consel.head;
+	} else {
+		*s = consel.head;
+		*e = consel.anchor;
+	}
+}
+
+
+/*
+================
+Con_SelectionRange
+
+Returns the selected cells [c0..c1] of a line, timestamps and trailing blanks excluded
+================
+*/
+static qboolean Con_SelectionRange( int line, int *c0, int *c1 ) {
+	conPos_t s, e;
+	const short *text;
+	int prefix, len;
+
+	if ( !consel.active || !Con_LineValid( line ) ) {
+		return qfalse;
+	}
+
+	Con_SelectionBounds( &s, &e );
+	if ( line < s.line || line > e.line ) {
+		return qfalse;
+	}
+
+	text = Con_LineText( line );
+	prefix = Con_LinePrefix( text );
+	len = Con_LineLength( text );
+
+	*c0 = line == s.line ? s.col : 0;
+	*c1 = line == e.line ? e.col : con.linewidth - 1;
+
+	if ( *c0 < prefix )
+		*c0 = prefix;
+	if ( *c1 > len - 1 )
+		*c1 = len - 1;
+
+	return *c0 <= *c1;
+}
+
+
+/*
+================
+Con_HitTest
+
+Converts window pixel coordinates to a console position using the last drawn layout.
+Points outside of the text area are clamped to its edges.
+================
+*/
+static void Con_HitTest( int mx, int my, conPos_t *pos ) {
+	int row, col, oldest;
+
+	row = -(int)floorf( (float)( my - consel.y0 ) / smallchar_height );
+	col = (int)floorf( (float)( mx - con.xadjust ) / smallchar_width ) - 1;
+
+	if ( row < 0 ) {
+		// below the last row
+		row = 0;
+		col = con.linewidth - 1;
+	} else if ( row >= consel.rows ) {
+		// above the first row
+		row = consel.rows - 1;
+		col = 0;
+	}
+
+	pos->line = consel.row0 - row;
+	pos->col = col;
+
+	oldest = con.current - con.totallines + 1;
+	if ( oldest < 0 )
+		oldest = 0;
+
+	if ( pos->line < oldest ) {
+		pos->line = oldest;
+		pos->col = 0;
+	} else if ( pos->line > con.current ) {
+		pos->line = con.current;
+		pos->col = con.linewidth - 1;
+	}
+
+	if ( pos->col < 0 )
+		pos->col = 0;
+	else if ( pos->col > con.linewidth - 1 )
+		pos->col = con.linewidth - 1;
+}
+
+
+/*
+================
+Con_CopySelection
+
+Puts the selected text on the system clipboard,
+returns qfalse if nothing is selected
+================
+*/
+qboolean Con_CopySelection( void ) {
+	conPos_t s, e;
+	const short *text;
+	char *buf, *out;
+	int line, first, c, c0, c1, ch;
+
+	if ( !consel.active || con.linewidth <= 0 ) {
+		return qfalse;
+	}
+
+	Con_SelectionBounds( &s, &e );
+
+	first = con.current - con.totallines + 1;
+	if ( first < s.line )
+		first = s.line;
+	if ( first < 0 )
+		first = 0;
+
+	if ( e.line < first || e.line > con.current ) {
+		return qfalse;
+	}
+
+	// worst case: every cell is a two byte character, plus a newline per line
+	buf = out = Z_Malloc( ( e.line - first + 1 ) * ( con.linewidth * 2 + 1 ) + 1 );
+
+	for ( line = first; line <= e.line; line++ ) {
+		if ( line > first ) {
+			*out++ = '\n';
+		}
+		if ( !Con_SelectionRange( line, &c0, &c1 ) ) {
+			continue;
+		}
+		text = Con_LineText( line );
+		for ( c = c0; c <= c1; c++ ) {
+			ch = text[c] & 0xff;
+			if ( ch < 0x80 ) {
+				*out++ = ch;
+			} else {	// latin-1 to utf-8
+				*out++ = 0xC0 | ( ch >> 6 );
+				*out++ = 0x80 | ( ch & 0x3F );
+			}
+		}
+	}
+	*out = '\0';
+
+	if ( out != buf ) {
+		Sys_SetClipboardText( buf );
+	}
+	Z_Free( buf );
+
+	return qtrue;
+}
+
+
+/*
+================
+Con_MouseDown
+
+Left mouse button pressed while the console is open
+================
+*/
+void Con_MouseDown( void ) {
+	int mx, my;
+
+	Con_ClearSelection();
+
+	if ( !Con_SelectEnabled() || !consel.layoutValid ) {
+		return;
+	}
+
+	if ( !IN_GetCursorPos( &mx, &my ) ) {
+		return;
+	}
+
+	Con_HitTest( mx, my, &consel.anchor );
+	consel.head = consel.anchor;
+	consel.scrollTime = cls.realtime;
+	consel.dragging = qtrue;
+}
+
+
+/*
+================
+Con_MouseUp
+
+Left mouse button released (or the console lost the input)
+================
+*/
+void Con_MouseUp( void ) {
+	if ( !consel.dragging ) {
+		return;
+	}
+
+	consel.dragging = qfalse;
+
+	if ( consel.active && con_selectCopy->integer ) {
+		Con_CopySelection();
+	}
+}
+
+
+/*
+================
+Con_UpdateSelection
+
+Called every frame, extends the selection while dragging
+and scrolls the console when the cursor leaves the text area
+================
+*/
+static void Con_UpdateSelection( void ) {
+	conPos_t pos;
+	int mx, my;
+
+	if ( !consel.dragging ) {
+		return;
+	}
+
+	if ( !( Key_GetCatcher() & KEYCATCH_CONSOLE ) || !keys[K_MOUSE1].down ) {
+		Con_MouseUp();
+		return;
+	}
+
+	if ( !consel.layoutValid || !IN_GetCursorPos( &mx, &my ) ) {
+		return;
+	}
+
+	if ( cls.realtime - consel.scrollTime >= 40 ) {
+		if ( my < smallchar_height ) {
+			Con_PageUp( 1 );
+			consel.scrollTime = cls.realtime;
+		} else if ( my >= consel.y0 + smallchar_height ) {
+			Con_PageDown( 1 );
+			consel.scrollTime = cls.realtime;
+		}
+	}
+
+	Con_HitTest( mx, my, &pos );
+	consel.head = pos;
+	consel.active = Con_PosCompare( &consel.anchor, &consel.head ) != 0;
+}
+
+
+/*
+==============================================================================
+
 DRAWING
 
 ==============================================================================
@@ -1048,8 +1422,11 @@ static void Con_DrawSolidConsole( float frac ) {
 	int				lines;
 	int				currentColorIndex;
 	int				colorIndex;
+	int				c0, c1;
 	float			yf, wf;
 	char			buf[ MAX_CVAR_VALUE_STRING ], *v[4];
+
+	consel.layoutValid = qfalse;
 
 	lines = cls.glconfig.vidHeight * frac;
 	if ( lines <= 0 )
@@ -1157,6 +1534,11 @@ static void Con_DrawSolidConsole( float frac ) {
 	currentColorIndex = ColorIndex( COLOR_WHITE );
 	re.SetColor( g_color_table[ currentColorIndex ] );
 
+	consel.y0 = y;
+	consel.row0 = row;
+	consel.rows = rows;
+	consel.layoutValid = rows > 0;
+
 	for ( i = 0 ; i < rows ; i++, y -= smallchar_height, row-- )
 	{
 		if ( row < 0 )
@@ -1168,6 +1550,14 @@ static void Con_DrawSolidConsole( float frac ) {
 		}
 
 		text = con.text + (row % con.totallines) * con.linewidth;
+
+		// selection highlight
+		if ( Con_SelectionRange( row, &c0, &c1 ) ) {
+			re.SetColor( con_selColor );
+			re.DrawStretchPic( con.xadjust + (c0 + 1) * smallchar_width, y,
+				(c1 - c0 + 1) * smallchar_width, smallchar_height, 0, 0, 1, 1, cls.whiteShader );
+			re.SetColor( g_color_table[ currentColorIndex ] );
+		}
 
 		for ( x = 0 ; x < con.linewidth ; x++ ) {
 			// skip rendering whitespace
@@ -1197,6 +1587,8 @@ Con_DrawConsole
 ==================
 */
 void Con_DrawConsole( void ) {
+
+	consel.layoutValid = qfalse;
 
 	// check for console width changes from a vid mode change
 	Con_CheckResize();
@@ -1230,6 +1622,8 @@ Scroll it up or down
 */
 void Con_RunConsole( void )
 {
+	Con_UpdateSelection();
+
 	// decide on the destination height of the console
 	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE )
 		con.finalFrac = con.userFrac;	// based on con_height* cvars, different with modifier keys
@@ -1299,6 +1693,7 @@ void Con_Close( void )
 
 	Field_Clear( &g_consoleField );
 	Con_ClearNotify();
+	Con_ClearSelection();
 	Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CONSOLE );
 	con.finalFrac = 0.0;			// none visible
 	con.displayFrac = 0.0;

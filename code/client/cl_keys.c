@@ -383,6 +383,12 @@ Handles history and console scrollback
 ====================
 */
 static void Console_Key( int key ) {
+	// left mouse button starts a text selection
+	if ( key == K_MOUSE1 ) {
+		Con_MouseDown();
+		return;
+	}
+
 	// ctrl-L clears screen
 	if ( key == 'l' && keys[K_CTRL].down ) {
 		Cbuf_AddText( "clear\n" );
@@ -690,6 +696,10 @@ static void CL_KeyUpEvent( int key, unsigned time )
 		anykeydown = 0;
 	}
 
+	if ( key == K_MOUSE1 ) {
+		Con_MouseUp();
+	}
+
 	// don't process key-up events for the console key
 	if ( key == K_CONSOLE || ( key == K_ESCAPE && keys[K_SHIFT].down ) ) {
 		return;
@@ -757,6 +767,10 @@ void CL_CharEvent( int key )
 	// distribute the key down event to the appropriate handler
 	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE )
 	{
+		// ctrl-c copies the selected console text
+		if ( key == 'c' - 'a' + 1 && Con_CopySelection() )
+			return;
+
 		Field_CharEvent( &g_consoleField, key );
 	}
 	else if ( Key_GetCatcher( ) & KEYCATCH_UI )

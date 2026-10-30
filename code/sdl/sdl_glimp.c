@@ -852,6 +852,21 @@ char *Sys_GetClipboardData( void )
 
 /*
 ===============
+Sys_SetClipboardText
+===============
+*/
+void Sys_SetClipboardText( const char *text )
+{
+#ifndef DEDICATED
+	if ( SDL_SetClipboardText( text ) != 0 ) {
+		Com_DPrintf( "SDL_SetClipboardText failed: %s\n", SDL_GetError() );
+	}
+#endif
+}
+
+
+/*
+===============
 Sys_SetClipboardBitmap
 ===============
 */

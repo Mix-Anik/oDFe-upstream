@@ -483,9 +483,37 @@ static void IN_DeactivateMouse( void )
 	}
 
 	// Always show the cursor when the mouse is disabled,
-	// but not when fullscreen
-	if ( !glw_state.isFullscreen )
+	// but not when fullscreen, unless the console wants to select text
+	if ( !glw_state.isFullscreen || ( Key_GetCatcher() & KEYCATCH_CONSOLE && Con_SelectEnabled() ) )
 		SDL_ShowCursor( SDL_TRUE );
+}
+
+
+/*
+===============
+IN_GetCursorPos
+
+System cursor position in window pixels, only while the mouse is not captured by the game
+===============
+*/
+qboolean IN_GetCursorPos( int *x, int *y )
+{
+	int mx, my;
+
+	if ( !mouseAvailable || mouseActive || !SDL_window )
+		return qfalse;
+
+	SDL_GetMouseState( &mx, &my );
+
+	if ( glw_state.window_width > 0 && glw_state.window_height > 0 ) {
+		mx = mx * cls.glconfig.vidWidth / glw_state.window_width;
+		my = my * cls.glconfig.vidHeight / glw_state.window_height;
+	}
+
+	*x = mx;
+	*y = my;
+
+	return qtrue;
 }
 
 
@@ -1361,7 +1389,8 @@ void IN_Frame( void )
 	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
 		// temporarily deactivate if not in the game and
 		// running on the desktop with multimonitor configuration
-		if ( !glw_state.isFullscreen || glw_state.monitorCount > 1 ) {
+		// or if the cursor is needed to select console text
+		if ( !glw_state.isFullscreen || glw_state.monitorCount > 1 || Con_SelectEnabled() ) {
 			IN_DeactivateMouse();
 			return;
 		}

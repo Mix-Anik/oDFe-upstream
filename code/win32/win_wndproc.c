@@ -876,6 +876,18 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	// one update sometimes, so we always check all states and look for events
 	case WM_LBUTTONDOWN:
 	case WM_LBUTTONUP:
+		// the game does not own the mouse while the console is open,
+		// pass the left button through for the text selection
+		if ( !IN_MouseActive() && ( Key_GetCatcher() & KEYCATCH_CONSOLE ) && Con_SelectEnabled() ) {
+			if ( uMsg == WM_LBUTTONDOWN ) {
+				SetCapture( hWnd );
+			} else {
+				ReleaseCapture();
+			}
+			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MOUSE1, uMsg == WM_LBUTTONDOWN, 0, NULL );
+			return 0;
+		}
+		// fallthrough
 	case WM_RBUTTONDOWN:
 	case WM_RBUTTONUP:
 	case WM_MBUTTONDOWN:
@@ -1042,6 +1054,57 @@ char *Sys_GetClipboardData( void ) {
 		CloseClipboard();
 	}
 	return data;
+}
+
+
+/*
+================
+Sys_SetClipboardText
+================
+*/
+void Sys_SetClipboardText( const char *text )
+{
+	HGLOBAL hMem;
+	WCHAR *wide, *ptr;
+	const WCHAR *s;
+	int wlen;
+
+	if ( !g_wv.hWnd || !text )
+		return;
+
+	// text is utf-8
+	wlen = MultiByteToWideChar( CP_UTF8, 0, text, -1, NULL, 0 );
+	if ( wlen <= 0 )
+		return;
+
+	wide = Z_Malloc( wlen * sizeof( WCHAR ) );
+	MultiByteToWideChar( CP_UTF8, 0, text, -1, wide, wlen );
+
+	if ( !OpenClipboard( g_wv.hWnd ) ) {
+		Z_Free( wide );
+		return;
+	}
+
+	EmptyClipboard();
+	// worst case every character is a newline that becomes CRLF
+	hMem = GlobalAlloc( GMEM_MOVEABLE | GMEM_DDESHARE, wlen * 2 * sizeof( WCHAR ) );
+	if ( hMem != NULL ) {
+		ptr = ( WCHAR* )GlobalLock( hMem );
+		if ( ptr != NULL ) {
+			for ( s = wide; *s; s++ ) {
+				if ( *s == L'\n' )
+					*ptr++ = L'\r';
+				*ptr++ = *s;
+			}
+			*ptr = L'\0';
+			GlobalUnlock( hMem );
+			SetClipboardData( CF_UNICODETEXT, hMem );
+		} else {
+			GlobalFree( hMem );
+		}
+	}
+	CloseClipboard();
+	Z_Free( wide );
 }
 
 

@@ -2155,6 +2155,29 @@ char *Sys_GetClipboardData( void )
 
 /*
 =================
+Sys_SetClipboardText
+=================
+*/
+void Sys_SetClipboardText( const char *text )
+{
+	// TODO: implement
+}
+
+
+/*
+=================
+IN_GetCursorPos
+=================
+*/
+qboolean IN_GetCursorPos( int *x, int *y )
+{
+	// TODO: implement, console text selection is not available here
+	return qfalse;
+}
+
+
+/*
+=================
 Sys_SetClipboardBitmap
 =================
 */

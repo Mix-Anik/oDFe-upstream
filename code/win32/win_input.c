@@ -131,6 +131,30 @@ qboolean IN_MouseActive( void )
 
 /*
 ================
+IN_GetCursorPos
+
+System cursor position in window pixels, only while the mouse is not captured by the game
+================
+*/
+qboolean IN_GetCursorPos( int *x, int *y )
+{
+	POINT pt;
+
+	if ( IN_MouseActive() || !g_wv.hWnd )
+		return qfalse;
+
+	if ( !GetCursorPos( &pt ) || !ScreenToClient( g_wv.hWnd, &pt ) )
+		return qfalse;
+
+	*x = pt.x;
+	*y = pt.y;
+
+	return qtrue;
+}
+
+
+/*
+================
 IN_UpdateWindow
 
 Called when window gets resized/moved
@@ -1201,7 +1225,8 @@ void IN_Frame( void ) {
 	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
 		// temporarily deactivate if not in the game and
 		// running on the desktop with multimonitor configuration
-		if ( !glw_state.cdsFullscreen || glw_state.monitorCount > 1 ) {
+		// or if the cursor is needed to select console text
+		if ( !glw_state.cdsFullscreen || glw_state.monitorCount > 1 || Con_SelectEnabled() ) {
 			IN_DeactivateMouse();
 			//WIN_EnableAltTab();
 			//WIN_DisableHook();
