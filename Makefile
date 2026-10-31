@@ -673,9 +673,6 @@ endif # !MINGW
 
 TARGET_CLIENT = $(CNAME)$(ARCHEXT)$(BINEXT)
 
-# the engine updater downloads the release file with the name this executable is built as
-$(B)/client/cl_update.o: override CFLAGS += -DODFE_BUILD_NAME=\"$(TARGET_CLIENT)\"
-
 TARGET_REND1 = $(RENDERER_PREFIX)_opengl_$(SHLIBNAME)
 TARGET_REND2 = $(RENDERER_PREFIX)_opengl2_$(SHLIBNAME)
 TARGET_RENDV = $(RENDERER_PREFIX)_vulkan_$(SHLIBNAME)

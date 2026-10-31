@@ -1,6 +1,6 @@
 /*
-Updater of the oDFs mod pk3 and of the engine executable itself: asks GitHub for the latest release, downloads the file of it
-that belongs to this installation, checks its SHA-512 and puts it in place. Both run as independent jobs with the same code.
+Updater of the oDFs mod pk3 and of the engine itself: asks GitHub for the latest release, downloads the file of it that
+belongs to this installation and puts it in place. Both run as independent jobs with the same code.
 
 Each job has console commands and read only cvars (PREFIX is odfs_update for the mod, odfe_update for the engine) that the
 mod menu drives and reads:
@@ -14,11 +14,11 @@ mod menu drives and reads:
 	PREFIX_error		reason when the state is error or checkfailed (a failed check is not shown by the menu)
 	odfe_version, odfe_version_num		the running engine
 
-Mod: zzz-defrag_vm.pk3 is left next to the installed pk3 as .new, files.c swaps it in at the next start, before any pk3 is
-opened (a loaded pk3 is locked on Windows).
-Engine: the file with the name this executable was built as (ODFE_BUILD_NAME, so the same renderer, architecture and
-platform) replaces the running executable, see Sys_ReplaceExecutable(); the new one runs after a restart. Builds that do not
-know their name (MSVC, macOS) report "unsupported".
+Mod: zzz-defrag_vm.pk3, its SHA-512 is checked against the release's .sha512 file. It is left next to the installed pk3 as
+.new, files.c swaps it in at the next start, before any pk3 is opened (a loaded pk3 is locked on Windows).
+Engine: the zip of the release for this platform (UPD_ENGINE_ASSET) holds every build of it: OpenGL, Vulkan and dedicated
+server. All oDFe* files of it replace the files of that name next to the running executable, or are added there, see
+Upd_InstallEngine(); the new ones run after a restart. Other platforms (MSVC, macOS, 32 bit, ARM) report "unsupported".
 
 The repository is PREFIX_repo (startup only), the download URLs are built from it, the tag and the fixed file name, so
 nothing the server or the API sends decides where a file comes from.
@@ -29,6 +29,11 @@ nothing the server or the API sends decides where a file comes from.
 #include "../qcommon/monocypher.h"
 #include "../qcommon/monocypher-ed25519.h"
 #include "../qcommon/odfe_version.h"
+#include "../qcommon/unzip.h"
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 #ifdef USE_CURL
 
@@ -37,8 +42,13 @@ nothing the server or the API sends decides where a file comes from.
 #define UPD_HASH_MAX		4096
 #define UPD_FILE_MAX		( 64 * 1024 * 1024 )
 
-#if defined( ODFE_BUILD_NAME ) && ( defined( _WIN32 ) || defined( __linux__ ) )
-#define UPD_ENGINE_SUPPORTED
+#define UPD_MAX_FILES		16
+
+// the zip of this platform in the release, as build.yml names them
+#if defined( _WIN32 ) && defined( __GNUC__ ) && defined( __x86_64__ )
+#define UPD_ENGINE_ASSET	"oDFe-windows-x86_64.zip"
+#elif defined( __linux__ ) && defined( __x86_64__ )
+#define UPD_ENGINE_ASSET	"oDFe-linux-x86_64.zip"
 #endif
 
 typedef enum {
@@ -52,6 +62,7 @@ typedef struct updJob_s {
 	const char	*what;			// for messages
 	const char	*prefix;		// cvar name prefix
 	const char	*asset;			// file name in the release, NULL: this build cannot be updated
+	qboolean	hashed;			// the release has <asset>.sha512, the download must match it
 	const char	*readyText;
 	const char	*( *install )( const void *data, int len );	// NULL, or the reason it failed
 
@@ -304,10 +315,12 @@ static void Upd_FinishFile( updJob_t *u )
 	uint8_t hash[UPD_HASH_SIZE];
 	const char *err;
 
-	crypto_sha512( hash, u->buf, u->len );
-	if ( crypto_verify64( hash, u->hash ) ) {
-		Upd_Fail( u, "checksum mismatch, the file was not installed" );
-		return;
+	if ( u->hashed ) {
+		crypto_sha512( hash, u->buf, u->len );
+		if ( crypto_verify64( hash, u->hash ) ) {
+			Upd_Fail( u, "checksum mismatch, the file was not installed" );
+			return;
+		}
 	}
 	err = u->install( u->buf, ( int )u->len );
 	if ( err ) {
@@ -415,14 +428,19 @@ static void Upd_Update( updJob_t *u )
 		Com_Printf( "%s update: nothing to download, run the check command first\n", u->what );
 		return;
 	}
-	Com_sprintf( url, sizeof( url ), "https://github.com/%s/releases/download/%s/%s.sha512", u->repo->string, u->tag, u->asset );
+	Com_sprintf( url, sizeof( url ), "https://github.com/%s/releases/download/%s/%s%s",
+		u->repo->string, u->tag, u->asset, u->hashed ? ".sha512" : "" );
 
 	u->silent = qfalse;
 	u->pct = -1;
 	Upd_SetProgress( u, 0 );
 	Cvar_Set( va( "%s_error", u->prefix ), "" );
 	Upd_SetState( u, "downloading" );
-	Upd_StartJob( u, STAGE_HASH, url, UPD_HASH_MAX, 20 );
+	if ( u->hashed ) {
+		Upd_StartJob( u, STAGE_HASH, url, UPD_HASH_MAX, 20 );
+	} else {
+		Upd_StartJob( u, STAGE_FILE, url, UPD_FILE_MAX, 0 );
+	}
 }
 
 
@@ -459,6 +477,191 @@ static const char *Upd_InstallMod( const void *data, int len )
 }
 
 
+// next to the running executable
+static void Upd_Path( char *out, size_t size, const char *name, const char *ext )
+{
+	Com_sprintf( out, size, "%s%c%s%s", Sys_Pwd(), PATH_SEP, name, ext );
+}
+
+
+static qboolean Upd_Exists( const char *path )
+{
+	FILE *f = Sys_FOpen( path, "rb" );
+
+	if ( f ) {
+		fclose( f );
+		return qtrue;
+	}
+	return qfalse;
+}
+
+
+// the zip reader of the engine does not check the CRC of what it unpacks
+static unsigned long Upd_Crc32( const byte *data, int len )
+{
+	unsigned long crc = 0xFFFFFFFFul;
+	int i, k;
+
+	for ( i = 0; i < len; i++ ) {
+		crc ^= data[i];
+		for ( k = 0; k < 8; k++ ) {
+			crc = ( crc >> 1 ) ^ ( 0xEDB88320ul & ( 0ul - ( crc & 1 ) ) );
+		}
+	}
+	return ~crc & 0xFFFFFFFFul;
+}
+
+
+static qboolean Upd_IsExecutable( const byte *data, int len )
+{
+#ifdef _WIN32
+	return len >= 2 && data[0] == 'M' && data[1] == 'Z';
+#else
+	return len >= 4 && !memcmp( data, "\x7f" "ELF", 4 );
+#endif
+}
+
+
+/*
+All oDFe* files of the zip (OpenGL, Vulkan and dedicated server builds) replace the files of that name next to the running
+executable, or are added. A running executable cannot be overwritten on Windows but it can be renamed: the old file becomes
+<name>.old and is removed by Upd_CleanupEngine() at a later start. Either all files are installed or none.
+*/
+static const char *Upd_InstallEngine( const void *data, int len )
+{
+	char names[UPD_MAX_FILES][64], zipPath[MAX_OSPATH], path[MAX_OSPATH], old[MAX_OSPATH], nw[MAX_OSPATH];
+	qboolean hadOld[UPD_MAX_FILES];
+	const char *err = NULL;
+	unzFile zip;
+	FILE *f;
+	int count = 0, swapped = 0, rc, i;
+
+	Upd_Path( zipPath, sizeof( zipPath ), "oDFe-update.zip", ".tmp" );
+	f = Sys_FOpen( zipPath, "wb" );
+	if ( !f ) {
+		return "cannot write next to the executable (is the folder writable?)";
+	}
+	if ( fwrite( data, 1, len, f ) != ( size_t )len || fclose( f ) ) {
+		remove( zipPath );
+		return "cannot write the update (disk full?)";
+	}
+	zip = unzOpen( zipPath );
+	if ( !zip ) {
+		remove( zipPath );
+		return "the downloaded file is not a zip";
+	}
+
+	// every engine file of the zip is checked and written as <name>.new
+	for ( rc = unzGoToFirstFile( zip ); rc == UNZ_OK && !err; rc = unzGoToNextFile( zip ) ) {
+		unz_file_info info;
+		char name[64];
+		byte *buf;
+		int n = -1;
+
+		if ( unzGetCurrentFileInfo( zip, &info, name, sizeof( name ), NULL, 0, NULL, 0 ) != UNZ_OK ) {
+			err = "damaged zip";
+		} else if ( info.size_filename >= sizeof( name ) || Q_stricmpn( name, "oDFe", 4 ) || strpbrk( name, "/\\:" ) ) {
+			continue;	// a folder or another file
+		} else if ( count == UPD_MAX_FILES || info.uncompressed_size < 4 || info.uncompressed_size > UPD_FILE_MAX ) {
+			err = "unexpected content of the zip";
+		} else if ( !( buf = malloc( info.uncompressed_size ) ) ) {
+			err = "out of memory";
+		} else {
+			if ( unzOpenCurrentFile( zip ) == UNZ_OK ) {
+				n = unzReadCurrentFile( zip, buf, info.uncompressed_size );
+				unzCloseCurrentFile( zip );
+			}
+			if ( n != ( int )info.uncompressed_size || Upd_Crc32( buf, n ) != ( info.crc & 0xFFFFFFFFul ) ) {
+				err = "damaged zip";
+			} else if ( !Upd_IsExecutable( buf, n ) ) {
+				err = "the zip holds a file that is not an executable";
+			} else {
+				Q_strncpyz( names[count++], name, sizeof( names[0] ) );
+				Upd_Path( nw, sizeof( nw ), name, ".new" );
+				f = Sys_FOpen( nw, "wb" );
+				if ( !f || fwrite( buf, 1, n, f ) != ( size_t )n ) {
+					err = "cannot write next to the executable (is the folder writable?)";
+				}
+				if ( f && fclose( f ) && !err ) {
+					err = "cannot write the update (disk full?)";
+				}
+#ifndef _WIN32
+				chmod( nw, 0755 );
+#endif
+			}
+			free( buf );
+		}
+	}
+	unzClose( zip );
+	remove( zipPath );
+	if ( !err && !count ) {
+		err = "the zip has no oDFe files";
+	}
+
+	// the old files move aside, the new ones take their names
+	for ( i = 0; i < count && !err; i++ ) {
+		Upd_Path( path, sizeof( path ), names[i], "" );
+		Upd_Path( old, sizeof( old ), names[i], ".old" );
+		Upd_Path( nw, sizeof( nw ), names[i], ".new" );
+		remove( old );
+		hadOld[i] = rename( path, old ) == 0;
+		if ( !hadOld[i] && Upd_Exists( path ) ) {
+			err = "cannot rename the running executable (close other copies of the game)";
+		} else if ( rename( nw, path ) ) {
+			err = "cannot put the new file in place";
+			if ( hadOld[i] ) {
+				rename( old, path );
+			}
+		} else {
+			swapped++;
+		}
+	}
+
+	if ( err ) {
+		for ( i = 0; i < swapped; i++ ) {	// back to how it was
+			Upd_Path( path, sizeof( path ), names[i], "" );
+			Upd_Path( old, sizeof( old ), names[i], ".old" );
+			remove( path );
+			if ( hadOld[i] ) {
+				rename( old, path );
+			}
+		}
+		for ( i = 0; i < count; i++ ) {
+			Upd_Path( nw, sizeof( nw ), names[i], ".new" );
+			remove( nw );
+		}
+	}
+	return err;
+}
+
+
+#ifdef UPD_ENGINE_ASSET
+// what an earlier update left behind (best effort, a file stays while another copy still runs it)
+static void Upd_CleanupEngine( void )
+{
+	static const char *const ext[] = { ".old", ".new" };
+	char path[MAX_OSPATH];
+	int e, i, n = 0;
+
+	for ( e = 0; e < 2; e++ ) {
+		char **list = Sys_ListFiles( Sys_Pwd(), ext[e], NULL, &n, qfalse );
+
+		for ( i = 0; i < n; i++ ) {
+			if ( !Q_stricmpn( list[i], "oDFe", 4 ) ) {
+				Upd_Path( path, sizeof( path ), list[i], "" );
+				remove( path );
+			}
+		}
+		if ( list ) {
+			Sys_FreeFileList( list );
+		}
+	}
+	Upd_Path( path, sizeof( path ), "oDFe-update.zip", ".tmp" );
+	remove( path );
+}
+#endif
+
+
 static void Upd_InitJob( updJob_t *u, const char *repo, const char *checkHelp, const char *repoHelp )
 {
 	const char *prefix = u->prefix;
@@ -480,6 +683,7 @@ void CL_Update_Init( void )
 	updMod.what = "mod";
 	updMod.prefix = "odfs_update";
 	updMod.asset = UPD_PAK_NAME;
+	updMod.hashed = qtrue;
 	updMod.readyText = "it will be installed at the next start";
 	updMod.install = Upd_InstallMod;
 	Upd_InitJob( &updMod, "Mix-Anik/oDFs",
@@ -488,11 +692,11 @@ void CL_Update_Init( void )
 
 	updEngine.what = "engine";
 	updEngine.prefix = "odfe_update";
-#ifdef UPD_ENGINE_SUPPORTED
-	updEngine.asset = ODFE_BUILD_NAME;
+#ifdef UPD_ENGINE_ASSET
+	updEngine.asset = UPD_ENGINE_ASSET;
 #endif
 	updEngine.readyText = "restart the game to use it";
-	updEngine.install = Sys_ReplaceExecutable;
+	updEngine.install = Upd_InstallEngine;
 	Upd_InitJob( &updEngine, "Mix-Anik/oDFe-upstream",
 		"Look for a new oDFe release on GitHub at startup (0 = never, the Update button then does nothing until odfe_checkupdate is run by hand).",
 		"GitHub repository (owner/name) the engine updater takes releases from." );
@@ -505,8 +709,8 @@ void CL_Update_Init( void )
 	Cmd_AddCommand( "odfe_checkupdate", Upd_CheckEngine_f );
 	Cmd_AddCommand( "odfe_update", Upd_UpdateEngine_f );
 
-#ifdef UPD_ENGINE_SUPPORTED
-	Sys_CleanupExecutableUpdate();
+#ifdef UPD_ENGINE_ASSET
+	Upd_CleanupEngine();
 #endif
 }
 

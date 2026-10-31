@@ -1325,10 +1325,6 @@ qboolean Sys_ResetReadOnlyAttribute( const char *ospath );
 
 const char *Sys_Pwd( void );
 const char *Sys_DefaultBasePath( void );
-
-// engine updater: puts a downloaded executable in place of the running one, returns NULL or the reason it failed
-const char *Sys_ReplaceExecutable( const void *data, int len );
-void		Sys_CleanupExecutableUpdate( void );
 const char *Sys_DefaultHomePath( void );
 const char *Sys_SteamPath( void );
 
