@@ -1,0 +1,48 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Release notes"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Release the latest build
+        env:
+          NOTES: ${{ inputs.notes }}
+        run: |
+          latest_sha() { gh api repos/$GH_REPO/git/ref/tags/latest --jq .object.sha; }
+
+          SHA=$(latest_sha)
+          gh api "repos/$GH_REPO/contents/code/qcommon/odfe_version.h?ref=$SHA" --jq .content \
+            | base64 -d | tr -d '\r' > version.h
+          VERSION=$(for k in MAJOR MINOR PATCH; do
+            sed -n "s/^#define ODFE_VERSION_$k[[:space:]]*\([0-9]*\).*/\1/p" version.h
+          done | paste -sd.)
+          TAG="v$VERSION"
+
+          gh release download latest --dir assets
+
+          cat > notes.md <<EOF
+          $NOTES
+
+          oDFe $VERSION, commit ${SHA::8}.
+
+          Download the file of your platform. oDFe.x64.exe is OpenGL and oDFe.vk.x64.exe is
+          Vulkan (64 bit Windows), without .x64 they are 32 bit, on Linux the names end in
+          .x86_64 or .x86. The .sha512 files are what the in-game updater checks, the zip
+          files hold the same builds.
+          EOF
+          gh release create "$TAG" assets/* --target "$SHA" \
+            --title "oDFe $VERSION" --notes-file notes.md

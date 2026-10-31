@@ -404,6 +404,20 @@ jobs:
           # 7z a -r oDFe-other.zip          linux-aarch64/
           # 7z a -r oDFe-other.zip          linux-armv7/
 
+      - name: Collect the executables
+        run: |
+          mkdir assets
+          for d in windows-mingw-x86_64 windows-mingw-x86 linux-x86_64 linux-x86 linux-arm64; do
+            for f in $d/oDFe*; do
+              case "$f" in *oDFe.ded*) continue ;; esac
+              n=$(basename "$f")
+              if [ -e "assets/$n" ]; then echo "::error::two builds are named $n"; exit 1; fi
+              cp "$f" "assets/$n"
+              (cd assets && sha512sum "$n" > "$n.sha512")
+            done
+          done
+          ls -l assets
+
       - name: Create latest build
         uses: czietz/action-automatic-releases@latest
         with:
@@ -413,6 +427,7 @@ jobs:
           title: Latest Build
           files: |
             *.zip
+            assets/*
 
   update-release:
     if: ${{ github.event_name == 'release' }}
@@ -450,51 +465,3 @@ jobs:
           tag: ${{ github.ref }}
           overwrite: true
           file: ${{ matrix.artifact_name }}
-
-  update-assets:
-    if: ${{ github.event_name == 'release' }}
-    needs: [windows-msys32, ubuntu-x86, ubuntu-arm64]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Tag matches the engine version
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          H=code/qcommon/odfe_version.h
-          V=$(for k in MAJOR MINOR PATCH; do sed -n "s/^#define ODFE_VERSION_$k[[:space:]]*\([0-9]*\).*/\1/p" $H | tr -d '\r'; done | paste -sd.)
-          echo "odfe_version.h: $V, tag: $TAG"
-          if [ "$TAG" != "v$V" ]; then
-            echo "::error::the tag must be v$V (code/qcommon/odfe_version.h), otherwise players are offered the same update again and again"
-            exit 1
-          fi
-
-      - name: Download Artifacts
-        uses: actions/download-artifact@v8
-
-      - name: Collect the executables
-        run: |
-          mkdir assets
-          for d in windows-mingw-x86_64 windows-mingw-x86 linux-x86_64 linux-x86 linux-arm64; do
-            for f in $d/oDFe*; do
-              case "$f" in *oDFe.ded*) continue ;; esac
-              n=$(basename "$f")
-              if [ -e "assets/$n" ]; then echo "::error::two builds are named $n"; exit 1; fi
-              cp "$f" "assets/$n"
-              (cd assets && sha512sum "$n" > "$n.sha512")
-            done
-          done
-          ls -l assets
-
-      - name: Upload executables
-        uses: "svenstaro/upload-release-action@latest"
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref }}
-          overwrite: true
-          file_glob: true
-          file: assets/*
