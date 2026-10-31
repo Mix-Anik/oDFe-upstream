@@ -134,6 +134,12 @@ typedef enum {
 	UI_CVAR_SETDESCRIPTION,
 	UI_TRAP_GETVALUE = COM_TRAP_GETVALUE,
 
+	// the client plugins, found by name with trap_GetValue (docs/plugins.md)
+	UI_ODF_PLUGIN_COUNT = 720,		// int trap_ODF_PluginCount( void )
+	UI_ODF_PLUGIN_INFO,				// int trap_ODF_PluginInfo( int index, int field, char *buf, int size ): see CL_Plugins_Info
+	UI_ODF_PLUGIN_SET_ENABLED,		// int trap_ODF_PluginSetEnabled( const char *name, int enable )
+	UI_ODF_PLUGIN_RESCAN,			// void trap_ODF_PluginRescan( void )
+
 } uiImport_t;
 
 typedef enum {

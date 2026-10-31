@@ -776,6 +776,26 @@ static qboolean UI_GetValue( char* value, int valueSize, const char* key ) {
 		return qtrue;
 	}
 
+	if ( !Q_stricmp( key, "trap_ODF_PluginCount" ) ) {
+		Com_sprintf( value, valueSize, "%i", UI_ODF_PLUGIN_COUNT );
+		return qtrue;
+	}
+
+	if ( !Q_stricmp( key, "trap_ODF_PluginInfo" ) ) {
+		Com_sprintf( value, valueSize, "%i", UI_ODF_PLUGIN_INFO );
+		return qtrue;
+	}
+
+	if ( !Q_stricmp( key, "trap_ODF_PluginSetEnabled" ) ) {
+		Com_sprintf( value, valueSize, "%i", UI_ODF_PLUGIN_SET_ENABLED );
+		return qtrue;
+	}
+
+	if ( !Q_stricmp( key, "trap_ODF_PluginRescan" ) ) {
+		Com_sprintf( value, valueSize, "%i", UI_ODF_PLUGIN_RESCAN );
+		return qtrue;
+	}
+
 	return qfalse;
 }
 
@@ -1181,6 +1201,23 @@ static intptr_t CL_UISystemCalls( intptr_t *args ) {
 	case UI_TRAP_GETVALUE:
 		VM_CHECKBOUNDS( uivm, args[1], args[2] );
 		return UI_GetValue( VMA(1), args[2], VMA(3) );
+
+	case UI_ODF_PLUGIN_COUNT:
+		return CL_Plugins_Count();
+
+	case UI_ODF_PLUGIN_INFO:
+		if ( args[4] < 1 ) {
+			return -1;
+		}
+		VM_CHECKBOUNDS( uivm, args[3], args[4] );
+		return CL_Plugins_Info( args[1], args[2], VMA(3), args[4] );
+
+	case UI_ODF_PLUGIN_SET_ENABLED:
+		return CL_Plugins_SetEnabled( VMA(1), args[2] );
+
+	case UI_ODF_PLUGIN_RESCAN:
+		CL_Plugins_Rescan();
+		return 0;
 
 	default:
 		Com_Error( ERR_DROP, "Bad UI system trap: %ld", (long int) args[0] );

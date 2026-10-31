@@ -6,6 +6,7 @@ OUT=${OUT:-build}
 HOME_DIR="$OUT/home"
 PLUGINS="$HOME_DIR/plugins"
 mkdir -p "$PLUGINS"
+rm -f "$PLUGINS"/*.dll "$PLUGINS"/*.so "$PLUGINS/disabled"
 C=../../code/client
 Q=../../code/qcommon
 S=../../code/server
@@ -29,6 +30,8 @@ $PL -DBAD_SIZE -o "$PLUGINS/badsize.$EXT" mock_plugin.c
 $PL -DREFUSE -o "$PLUGINS/refuse.$EXT" mock_plugin.c
 $PL -DOLD_EXPORTS -o "$PLUGINS/oldexp.$EXT" mock_plugin.c
 $PL -o "$PLUGINS/noentry.$EXT" noentry.c
+# a name that cannot be used (a space)
+cp "$PLUGINS/mock.$EXT" "$PLUGINS/bad name.$EXT"
 
 gcc -O2 -Wall -Wno-unused-function $INC -I. -o "$OUT/client_plugin_test" \
 	client_plugin_test.c stubs.c \

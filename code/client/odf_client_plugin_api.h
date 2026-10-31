@@ -6,11 +6,14 @@ This header is self-contained (it needs nothing but the C library), so a plugin 
 built without the engine sources: copy this file into the plugin project.
 
 A client plugin is a shared library, <homepath>/plugins/<name>.dll (Windows) or
-<name>.so (everything else), loaded when the client starts. Which ones are loaded is
-decided by the startup-only cvar cl_plugins, a space separated list of names
-("trajectory"). Plugins are only ever loaded from that folder, never from downloaded
-paks. The client entry point is ODF_ClientPluginEntry, so a server plugin cannot be
-loaded here (and the other way round).
+<name>.so (everything else), loaded when the client starts: every library of the folder
+that has the client entry point is loaded, except the ones the player switched off (the
+menu does that, the file plugins/disabled keeps the names). Plugins are only ever loaded
+from that folder, never from downloaded paks. The client entry point is
+ODF_ClientPluginEntry, so a server plugin is not a client plugin (and the other way
+round). A plugin can be switched off and on while the game runs: it gets Shutdown (and
+CGameShutdown), and later Init again and MapLoad for the map that is loaded, with all of
+its state lost.
 
 HOW IT WORKS
 
@@ -362,7 +365,7 @@ typedef struct {
 typedef struct {
 	int			size;			// sizeof( odfcPluginExport_t ) the plugin was built with
 	int			apiVersion;		// ODFC_API_VERSION the plugin was built against
-	const char	*name;			// short name, as in cl_plugins ("trajectory")
+	const char	*name;			// short name ("trajectory")
 	const char	*version;		// free text, shown in the log
 
 	// Called once after loading. Return 0 on success; anything else unloads the plugin

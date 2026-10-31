@@ -20,8 +20,9 @@ The crash guard is the one of the server plugins (sv_plugin_guard.c).
 #define PLUGIN_EXT	".so"
 #endif
 
-#define MAX_PLUGINS			8
-#define MAX_PLUGIN_NAME		32
+#define MAX_PLUGINS			64
+#define MAX_PLUGIN_NAME		256
+#define DISABLED_FILE		"disabled"		// in the plugins folder: the names of the plugins that are switched off
 #define MAX_POLY_VERTS		64
 
 // the API structs are copied to renderer structs byte by byte
@@ -34,7 +35,8 @@ typedef enum {
 	PS_RUNNING,
 	PS_STOPPED,		// shut down normally
 	PS_FAILED,		// did not load or refused to start
-	PS_FAULTED		// crashed, never called again
+	PS_FAULTED,		// crashed, never called again
+	PS_DISABLED		// switched off, not loaded
 } pluginState_t;
 
 typedef struct {
@@ -46,6 +48,9 @@ typedef struct {
 	qboolean					guarded;
 	pluginState_t				state;
 	char						note[192];		// why it is not running
+	qboolean					disabled;		// switched off by the player (kept in the disabled file)
+	qboolean					hidden;			// a library without a client plugin in it: not shown
+	qboolean					notClient;		// set while loading when the library is not a client plugin
 } plugin_t;
 
 // what the plugin is allowed to draw right now
@@ -58,9 +63,12 @@ typedef enum {
 static plugin_t				plugins[MAX_PLUGINS];
 static int					numPlugins;
 static plugin_t				*current;		// the plugin whose code is running, for log prefixes
-static cvar_t				*cl_plugins;
 static odfcPluginImport_t	imports;
 static qboolean				guardInstalled;
+static qboolean				guardTried;
+static char					loadedMap[MAX_QPATH];		// the map of the game module that is running
+static char					disabledNames[MAX_PLUGINS][MAX_PLUGIN_NAME];		// what the disabled file said when it was read or written
+static int					numDisabledNames;
 static qboolean				mapLoaded;		// between MapLoad and CGameShutdown
 static drawPhase_t			drawPhase;
 
@@ -594,7 +602,7 @@ static void Imp_DrawModel( float x, float y, float w, float h, int model, const 
 // console commands of plugins
 // ---------------------------------------------------------------------------
 
-#define MAX_PLUGIN_COMMANDS		32
+#define MAX_PLUGIN_COMMANDS		256
 #define MAX_COMMAND_NAME		32
 
 typedef struct {
@@ -739,6 +747,35 @@ static qboolean ValidPluginName( const char *name )
 }
 
 static void FORMAT_PRINTF( 2, 3 ) Plugin_Fail( plugin_t *p, const char *fmt, ... );
+
+// the commands of a plugin that is not running any more
+static void Plugin_RemoveCommands( plugin_t *p )
+{
+	int i, kept = 0;
+
+	for ( i = 0; i < numPluginCommands; i++ ) {
+		if ( pluginCommands[i].plugin == p ) {
+			Cmd_RemoveCommand( pluginCommands[i].name );
+			continue;
+		}
+		pluginCommands[kept++] = pluginCommands[i];
+	}
+	numPluginCommands = kept;
+}
+
+// A crashed plugin stays mapped: nothing of it runs again, and unloading could run more of its code.
+static void Plugin_Unload( plugin_t *p )
+{
+	if ( p->state == PS_FAULTED ) {
+		return;
+	}
+	if ( p->lib ) {
+		Sys_UnloadLibrary( p->lib );
+		p->lib = NULL;
+	}
+	p->exp = NULL;
+}
+
 static void Plugin_Fail( plugin_t *p, const char *fmt, ... )
 {
 	va_list ap;
@@ -747,37 +784,36 @@ static void Plugin_Fail( plugin_t *p, const char *fmt, ... )
 	Q_vsnprintf( p->note, sizeof( p->note ), fmt, ap );
 	va_end( ap );
 	p->state = PS_FAILED;
-	Com_Printf( S_COLOR_YELLOW "Plugin '%s' not loaded: %s\n", p->name, p->note );
+	if ( p->notClient ) {
+		Com_DPrintf( "%s is not a client plugin: %s\n", p->name, p->note );		// a server plugin or a library it needs
+	} else {
+		Com_Printf( S_COLOR_YELLOW "Plugin '%s' not loaded: %s\n", p->name, p->note );
+	}
+	Plugin_RemoveCommands( p );
+	Plugin_Unload( p );
 }
 
-static void Plugin_Load( const char *name )
+static void Plugins_EnsureGuard( void )
 {
-	plugin_t *p;
+	if ( !guardTried ) {
+		guardTried = qtrue;
+		guardInstalled = PluginGuard_Init() != 0;
+	}
+}
+
+// Loads the library of the plugin and starts it, or says why it did not. The state is PS_RUNNING or one of the others after.
+static void Plugin_Start( plugin_t *p )
+{
 	odfcPluginEntry_t entry;
 	call_t call;
 	FILE *f;
-	int i;
 
-	for ( i = 0; i < numPlugins; i++ ) {
-		if ( !Q_stricmp( plugins[i].name, name ) ) {
-			return;		// listed twice
-		}
-	}
-	if ( numPlugins >= MAX_PLUGINS ) {
-		Com_Printf( S_COLOR_YELLOW "Plugin '%s' not loaded: at most %i plugins\n", name, MAX_PLUGINS );
-		return;
-	}
+	Plugins_EnsureGuard();
+	p->state = PS_FAILED;
+	p->notClient = qfalse;
+	p->note[0] = '\0';
 
-	p = &plugins[numPlugins++];
-	Com_Memset( p, 0, sizeof( *p ) );
-	Q_strncpyz( p->name, name, sizeof( p->name ) );
-
-	if ( !ValidPluginName( name ) ) {
-		Plugin_Fail( p, "invalid name (letters, digits, _ and - only)" );
-		return;
-	}
-
-	Q_strncpyz( p->path, FS_BuildOSPath( Cvar_VariableString( "fs_homepath" ), "plugins", va( "%s" PLUGIN_EXT, name ) ), sizeof( p->path ) );
+	Q_strncpyz( p->path, FS_BuildOSPath( Cvar_VariableString( "fs_homepath" ), "plugins", va( "%s" PLUGIN_EXT, p->name ) ), sizeof( p->path ) );
 	f = Sys_FOpen( p->path, "rb" );
 	if ( !f ) {
 		Plugin_Fail( p, "%s not found", p->path );
@@ -792,15 +828,14 @@ static void Plugin_Load( const char *name )
 	}
 	entry = (odfcPluginEntry_t)Sys_LoadFunction( p->lib, "ODF_ClientPluginEntry" );
 	if ( !entry ) {
-		Plugin_Fail( p, "%s has no ODF_ClientPluginEntry (not a client plugin?)", p->path );
-		Sys_UnloadLibrary( p->lib );
-		p->lib = NULL;
+		p->notClient = qtrue;
+		Plugin_Fail( p, "%s has no ODF_ClientPluginEntry", p->path );
 		return;
 	}
 
 	p->guarded = guardInstalled && PluginGuard_ModuleRange( p->lib, (const void *)entry, &p->range );
 	if ( !p->guarded ) {
-		Com_Printf( S_COLOR_YELLOW "Plugin '%s': crash protection is not available on this platform, a crash in the plugin will crash the game.\n", name );
+		Com_Printf( S_COLOR_YELLOW "Plugin '%s': crash protection is not available on this platform, a crash in the plugin will crash the game.\n", p->name );
 	}
 
 	Com_Memset( &call, 0, sizeof( call ) );
@@ -816,13 +851,11 @@ static void Plugin_Load( const char *name )
 	}
 	if ( p->exp->apiVersion > ODFC_API_VERSION ) {
 		Plugin_Fail( p, "built for client plugin API %i, this client has %i", p->exp->apiVersion, ODFC_API_VERSION );
-		p->exp = NULL;
 		return;
 	}
 	// the functions of version 1 have to be there; newer ones are optional and checked where they are used
 	if ( p->exp->size < (int)( offsetof( odfcPluginExport_t, Draw2D ) + sizeof( p->exp->Draw2D ) ) ) {
 		Plugin_Fail( p, "export table is too small (%i bytes)", p->exp->size );
-		p->exp = NULL;
 		return;
 	}
 
@@ -842,34 +875,231 @@ static void Plugin_Load( const char *name )
 	Com_Printf( "Client plugin '%s' %s loaded%s\n", p->name, p->exp->version ? p->exp->version : "", p->guarded ? "" : " (unguarded)" );
 }
 
-static void Plugins_List_f( void )
+// Stops a running plugin and unloads it. A plugin that crashes while it is told to stop stays crashed.
+static void Plugin_Stop( plugin_t *p )
 {
-	static const char *const stateNames[] = { "running", "stopped", "failed", "crashed" };
+	call_t call;
+
+	if ( p->state == PS_RUNNING ) {
+		if ( mapLoaded && PLUGIN_HAS( p, CGameShutdown ) ) {
+			Com_Memset( &call, 0, sizeof( call ) );
+			call.kind = PC_CGAMESHUTDOWN;
+			if ( !Plugin_Run( p, &call ) ) {
+				return;
+			}
+		}
+		if ( PLUGIN_HAS( p, Shutdown ) ) {
+			Com_Memset( &call, 0, sizeof( call ) );
+			call.kind = PC_SHUTDOWN;
+			if ( !Plugin_Run( p, &call ) ) {
+				return;
+			}
+		}
+		p->state = PS_STOPPED;
+	}
+	Plugin_RemoveCommands( p );
+	Plugin_Unload( p );
+}
+
+
+// ---------------------------------------------------------------------------
+// the plugins that are switched off: plugins/disabled, one name per line
+// ---------------------------------------------------------------------------
+
+static const char *DisabledFilePath( void )
+{
+	return FS_BuildOSPath( Cvar_VariableString( "fs_homepath" ), "plugins", DISABLED_FILE );
+}
+
+static qboolean Disabled_Listed( const char *name )
+{
 	int i;
 
-	if ( !numPlugins ) {
-		Com_Printf( "No client plugins. Set cl_plugins to a list of names to load them from %s/plugins at startup.\n", Cvar_VariableString( "fs_homepath" ) );
+	for ( i = 0; i < numDisabledNames; i++ ) {
+		if ( !Q_stricmp( disabledNames[i], name ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static void Disabled_Read( void )
+{
+	static char text[MAX_PLUGINS * ( MAX_PLUGIN_NAME + 2 )];
+	char *s, *line, *end;
+	FILE *f;
+	size_t len;
+
+	numDisabledNames = 0;
+	f = Sys_FOpen( DisabledFilePath(), "rb" );
+	if ( !f ) {
 		return;
 	}
+	len = fread( text, 1, sizeof( text ) - 1, f );
+	fclose( f );
+	text[len] = '\0';
+
+	s = text;
+	if ( (unsigned char)s[0] == 0xEF && (unsigned char)s[1] == 0xBB && (unsigned char)s[2] == 0xBF ) {
+		s += 3;		// a byte order mark, from an editor
+	}
+	while ( *s ) {
+		line = s;
+		while ( *s && *s != '\n' ) {
+			s++;
+		}
+		if ( *s ) {
+			*s++ = '\0';
+		}
+		while ( *line == ' ' || *line == '\t' || *line == '\r' ) {
+			line++;
+		}
+		end = line + strlen( line );
+		while ( end > line && ( end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' ) ) {
+			*--end = '\0';
+		}
+		if ( !*line || *line == '#' || !ValidPluginName( line ) || Disabled_Listed( line ) ) {
+			continue;
+		}
+		if ( numDisabledNames >= MAX_PLUGINS ) {
+			break;
+		}
+		Q_strncpyz( disabledNames[numDisabledNames++], line, MAX_PLUGIN_NAME );
+	}
+}
+
+// Writes the names of the plugins that are switched off. Names of plugins that are not in the folder any more are dropped.
+static qboolean Disabled_Write( void )
+{
+	FILE *f;
+	int i, n = 0;
+
+	for ( i = 0; i < numPlugins; i++ ) {
+		if ( plugins[i].disabled && !plugins[i].hidden ) {
+			Q_strncpyz( disabledNames[n++], plugins[i].name, MAX_PLUGIN_NAME );
+		}
+	}
+	numDisabledNames = n;
+
+	f = Sys_FOpen( DisabledFilePath(), "wb" );
+	if ( !f ) {
+		Com_Printf( S_COLOR_YELLOW "Cannot write %s, the choice is lost when the game is closed.\n", DisabledFilePath() );
+		return qfalse;
+	}
+	for ( i = 0; i < n; i++ ) {
+		fprintf( f, "%s\n", disabledNames[i] );
+	}
+	fclose( f );
+	return qtrue;
+}
+
+
+// ---------------------------------------------------------------------------
+// the plugins folder
+// ---------------------------------------------------------------------------
+
+static plugin_t *Plugin_Find( const char *name )
+{
+	int i;
+
+	for ( i = 0; i < numPlugins; i++ ) {
+		if ( !Q_stricmp( plugins[i].name, name ) ) {
+			return &plugins[i];
+		}
+	}
+	return NULL;
+}
+
+static int Plugins_NameCompare( const void *a, const void *b )
+{
+	return Q_stricmp( *(char *const *)a, *(char *const *)b );
+}
+
+/*
+===============
+Plugins_Scan
+
+Starts every library of the plugins folder that is not known yet, except the ones that are switched off. Libraries
+without a client plugin entry (server plugins, what a plugin needs) are remembered as hidden, so they are not tried again.
+===============
+*/
+static void Plugins_Scan( void )
+{
+	char dir[MAX_OSPATH], **files;
+	int numFiles, extLen = (int)strlen( PLUGIN_EXT ), i;
+
+	Q_strncpyz( dir, FS_BuildOSPath( Cvar_VariableString( "fs_homepath" ), "plugins", "" ), sizeof( dir ) );
+	i = (int)strlen( dir );
+	while ( i > 0 && ( dir[i - 1] == '/' || dir[i - 1] == '\\' ) ) {
+		dir[--i] = '\0';
+	}
+
+	files = Sys_ListFiles( dir, PLUGIN_EXT, NULL, &numFiles, qfalse );
+	if ( !files ) {
+		return;
+	}
+	qsort( files, numFiles, sizeof( char * ), Plugins_NameCompare );
+
+	for ( i = 0; i < numFiles; i++ ) {
+		char name[MAX_PLUGIN_NAME];
+		int len = (int)strlen( files[i] ) - extLen;
+		plugin_t *p;
+
+		// the listing can match more than the extension (8.3 names)
+		if ( len < 1 || len >= MAX_PLUGIN_NAME || Q_stricmp( files[i] + len, PLUGIN_EXT ) ) {
+			continue;
+		}
+		Q_strncpyz( name, files[i], len + 1 );
+		if ( !ValidPluginName( name ) || Plugin_Find( name ) ) {
+			continue;
+		}
+		if ( numPlugins >= MAX_PLUGINS ) {
+			Com_Printf( S_COLOR_YELLOW "Plugin '%s' not loaded: at most %i libraries are looked at\n", name, MAX_PLUGINS );
+			break;
+		}
+
+		p = &plugins[numPlugins++];
+		Com_Memset( p, 0, sizeof( *p ) );
+		Q_strncpyz( p->name, name, sizeof( p->name ) );
+		p->disabled = Disabled_Listed( name );
+		if ( p->disabled ) {
+			p->state = PS_DISABLED;
+			continue;
+		}
+		Plugin_Start( p );
+		p->hidden = p->notClient;
+	}
+	Sys_FreeFileList( files );
+}
+
+static void Plugins_List_f( void )
+{
+	static const char *const stateNames[] = { "running", "stopped", "failed", "crashed", "disabled" };
+	int i, shown = 0;
+
 	Com_Printf( "%-16s %-8s %s\n", "name", "state", "details" );
 	for ( i = 0; i < numPlugins; i++ ) {
 		const plugin_t *p = &plugins[i];
 
-		Com_Printf( "%-16s %-8s %s%s\n", p->name, stateNames[p->state],
+		if ( p->hidden ) {
+			continue;
+		}
+		Com_Printf( "%-16s %-8s %s%s%s\n", p->name, stateNames[p->state],
 			p->state == PS_RUNNING && p->exp->version ? p->exp->version : p->note,
-			p->state == PS_RUNNING && !p->guarded ? " (no crash protection)" : "" );
+			p->state == PS_RUNNING && !p->guarded ? " (no crash protection)" : "",
+			p->disabled && p->state != PS_DISABLED ? " (disabled, off after a restart)" : "" );
+		shown++;
+	}
+	if ( !shown ) {
+		Com_Printf( "No client plugins. Put them in %s/plugins.\n", Cvar_VariableString( "fs_homepath" ) );
 	}
 }
 
 void CL_Plugins_Init( void )
 {
-	char list[MAX_CVAR_VALUE_STRING];
-	char *s, *token;
+	int i, disabledInFolder = 0;
 
 	Cmd_AddCommand( "clplugins", Plugins_List_f );
-
-	cl_plugins = Cvar_Get( "cl_plugins", "", CVAR_INIT | CVAR_PROTECTED );
-	Cvar_SetDescription( cl_plugins, "Client plugins to load at startup, separated by spaces. Each is a library in the plugins folder of the home path." );
 
 	Com_Memset( &imports, 0, sizeof( imports ) );
 	imports.size = sizeof( imports );
@@ -900,15 +1130,17 @@ void CL_Plugins_Init( void )
 	imports.CommandArgc = Imp_CommandArgc;
 	imports.CommandArgv = Imp_CommandArgv;
 
-	Q_strncpyz( list, cl_plugins->string, sizeof( list ) );
-	if ( !list[0] ) {
-		return;
+	Disabled_Read();
+	Plugins_Scan();
+
+	// names of libraries that are gone
+	for ( i = 0; i < numPlugins; i++ ) {
+		if ( plugins[i].disabled ) {
+			disabledInFolder++;
+		}
 	}
-
-	guardInstalled = PluginGuard_Init() != 0;
-
-	for ( s = list; ( token = strtok( s, " ,;" ) ) != NULL; s = NULL ) {
-		Plugin_Load( token );
+	if ( disabledInFolder != numDisabledNames ) {
+		Disabled_Write();
 	}
 }
 
@@ -938,18 +1170,131 @@ void CL_Plugins_Shutdown( void )
 			}
 			p->state = PS_STOPPED;
 		}
-		// a crashed plugin stays mapped: nothing of it runs again, and unloading could run more of its code
-		if ( p->lib && p->state != PS_FAULTED ) {
-			Sys_UnloadLibrary( p->lib );
-			p->lib = NULL;
-		}
+		Plugin_Unload( p );
 	}
 	numPlugins = 0;
+	numDisabledNames = 0;
 
 	if ( guardInstalled ) {
 		PluginGuard_Shutdown();
 		guardInstalled = qfalse;
 	}
+	guardTried = qfalse;
+}
+
+
+// ---------------------------------------------------------------------------
+// switching plugins on and off while the game runs, for the menu
+// ---------------------------------------------------------------------------
+
+// the plugins the menu shows
+static plugin_t *Plugin_Visible( int index )
+{
+	int i;
+
+	if ( index < 0 ) {
+		return NULL;
+	}
+	for ( i = 0; i < numPlugins; i++ ) {
+		if ( !plugins[i].hidden && index-- == 0 ) {
+			return &plugins[i];
+		}
+	}
+	return NULL;
+}
+
+int CL_Plugins_Count( void )
+{
+	int i, n = 0;
+
+	for ( i = 0; i < numPlugins; i++ ) {
+		if ( !plugins[i].hidden ) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/*
+===============
+CL_Plugins_Info
+
+One thing about plugin number index of CL_Plugins_Count: field 0 is the name, 1 the version (only of a running plugin),
+2 why it is not running, 3 "1" when it is switched off (also while it still runs until the game is restarted: a plugin
+that crashed cannot be unloaded). Returns the state: 0 running, 1 stopped, 2 failed, 3 crashed, 4 disabled; -1 when
+there is no such plugin.
+===============
+*/
+int CL_Plugins_Info( int index, int field, char *out, int outSize )
+{
+	const plugin_t *p = Plugin_Visible( index );
+	const char *text = "";
+
+	if ( !out || outSize < 1 ) {
+		return -1;
+	}
+	out[0] = '\0';
+	if ( !p ) {
+		return -1;
+	}
+	switch ( field ) {
+	case 0: text = p->name; break;
+	case 1: text = p->state == PS_RUNNING && p->exp && p->exp->version ? p->exp->version : ""; break;
+	case 2: text = p->state == PS_FAILED || p->state == PS_FAULTED ? p->note : ""; break;
+	case 3: text = p->disabled ? "1" : "0"; break;
+	}
+	Q_strncpyz( out, text, outSize );
+	return p->state;
+}
+
+/*
+===============
+CL_Plugins_SetEnabled
+
+Switches a plugin on or off now and remembers it for the next start. Returns 0 only when there is no plugin of that
+name; whether it runs is in CL_Plugins_Info (it may have failed to start).
+===============
+*/
+int CL_Plugins_SetEnabled( const char *name, int enable )
+{
+	plugin_t *p = name ? Plugin_Find( name ) : NULL;
+
+	if ( !p || p->hidden ) {
+		return 0;
+	}
+	if ( ( enable != 0 ) == !p->disabled && p->state != PS_FAILED ) {
+		return 1;
+	}
+
+	p->disabled = enable ? qfalse : qtrue;
+	if ( p->state != PS_FAULTED ) {
+		if ( p->disabled ) {
+			Plugin_Stop( p );
+			if ( p->state != PS_FAULTED ) {
+				p->state = PS_DISABLED;
+				p->note[0] = '\0';
+			}
+		} else {
+			Plugin_Start( p );
+			// it missed the map that is already loaded
+			if ( p->state == PS_RUNNING && mapLoaded && PLUGIN_HAS( p, MapLoad ) ) {
+				call_t call;
+
+				Com_Memset( &call, 0, sizeof( call ) );
+				call.kind = PC_MAPLOAD;
+				call.mapName = loadedMap;
+				Plugin_Run( p, &call );
+			}
+		}
+	}
+	Disabled_Write();
+	return 1;
+}
+
+// picks up libraries that were put into the folder while the game runs
+void CL_Plugins_Rescan( void )
+{
+	Plugins_Scan();
 }
 
 
@@ -973,10 +1318,8 @@ void CL_Plugins_MapLoad( const char *mapName )
 {
 	char name[MAX_QPATH];
 
-	if ( !numPlugins ) {
-		return;
-	}
 	Q_strncpyz( name, mapName ? mapName : "", sizeof( name ) );
+	Q_strncpyz( loadedMap, name, sizeof( loadedMap ) );
 	mapLoaded = qtrue;
 	published = qfalse;
 	SoundOwners_Reset();
@@ -985,8 +1328,7 @@ void CL_Plugins_MapLoad( const char *mapName )
 
 void CL_Plugins_CGameShutdown( void )
 {
-	if ( !numPlugins || !mapLoaded ) {
-		mapLoaded = qfalse;
+	if ( !mapLoaded ) {
 		return;
 	}
 	PLUGINS_RUN( PC_CGAMESHUTDOWN, CGameShutdown, );

@@ -12,6 +12,7 @@ counts what it is given, a fake collision trace, and the client state (cl, clc, 
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <dirent.h>
 #endif
 
 #include "client.h"
@@ -40,8 +41,8 @@ int stModelCalls, stModelHandle, stClearScenes, stRenderScenes;
 int stRenderRect[4], stRenderFlags;
 int stSoundCalls;
 int numAddedCommands;
-char addedCommands[8][32];
-xcommand_t addedCommandFn[8];
+char addedCommands[32][32];
+xcommand_t addedCommandFn[32];
 char stCmdArgs[8][64];
 int stCmdArgc;
 int stCvarFlagsLast;
@@ -156,7 +157,7 @@ void Cvar_VariableStringBufferSafe( const char *name, char *buf, int size, int f
 
 void Cmd_AddCommand( const char *name, xcommand_t fn )
 {
-	if ( fn && numAddedCommands < 8 ) {
+	if ( fn && numAddedCommands < 32 ) {
 		snprintf( addedCommands[numAddedCommands], sizeof( addedCommands[0] ), "%s", name );
 		addedCommandFn[numAddedCommands++] = fn;
 	}
@@ -207,6 +208,66 @@ char *FS_BuildOSPath( const char *base, const char *game, const char *qpath )
 }
 
 FILE *Sys_FOpen( const char *ospath, const char *mode ) { return fopen( ospath, mode ); }
+
+// the names of the files in a folder that end with the extension, like the engine's
+char **Sys_ListFiles( const char *directory, const char *extension, const char *filter, int *numfiles, int subdirs )
+{
+	char **list = (char **)calloc( 257, sizeof( char * ) );
+	int n = 0, extLen = (int)strlen( extension );
+
+	(void)filter; (void)subdirs;
+#ifdef _WIN32
+	{
+		char pattern[600];
+		WIN32_FIND_DATAA fd;
+		HANDLE h;
+
+		snprintf( pattern, sizeof( pattern ), "%s\\*%s", directory, extension );
+		h = FindFirstFileA( pattern, &fd );
+		if ( h != INVALID_HANDLE_VALUE ) {
+			do {
+				if ( n < 256 && !( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) ) {
+					list[n++] = strdup( fd.cFileName );
+				}
+			} while ( FindNextFileA( h, &fd ) );
+			FindClose( h );
+		}
+	}
+#else
+	{
+		DIR *d = opendir( directory );
+		struct dirent *e;
+
+		while ( d && ( e = readdir( d ) ) != NULL ) {
+			int len = (int)strlen( e->d_name );
+
+			if ( n < 256 && len >= extLen && !strcmp( e->d_name + len - extLen, extension ) ) {
+				list[n++] = strdup( e->d_name );
+			}
+		}
+		if ( d ) {
+			closedir( d );
+		}
+	}
+#endif
+	(void)extLen;
+	*numfiles = n;
+	if ( !n ) {
+		free( list );
+		return NULL;
+	}
+	return list;
+}
+
+void Sys_FreeFileList( char **list )
+{
+	int i;
+
+	for ( i = 0; list && list[i]; i++ ) {
+		free( list[i] );
+	}
+	free( list );
+}
 
 int Sys_Milliseconds( void ) { return 0; }
 
