@@ -655,6 +655,11 @@ static void CL_KeyDownEvent( int key, unsigned time )
 		return;
 	}
 
+	// demo playback controls: pause / seek (cl_demoseek.c)
+	if ( clc.demoplaying && Key_GetCatcher() == 0 && CLDemo_KeyDown( key ) ) {
+		return;
+	}
+
 	// distribute the key down event to the appropriate handler
 	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) {
 		Console_Key( key );
@@ -707,6 +712,11 @@ static void CL_KeyUpEvent( int key, unsigned time )
 
 	// hardcoded screenshot key
 	if ( key == K_PRINT ) {
+		return;
+	}
+
+	// end of a demo timeline drag (cl_demoseek.c)
+	if ( clc.demoplaying && CLDemo_KeyUp( key ) ) {
 		return;
 	}
 

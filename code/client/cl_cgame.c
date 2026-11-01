@@ -380,6 +380,7 @@ CL_ShutdonwCGame
 ====================
 */
 void CL_ShutdownCGame( void ) {
+	CLDemo_CgameShutdown();
 
 	Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
 	cls.cgameStarted = qfalse;
@@ -450,6 +451,11 @@ static qboolean CL_GetValue( char* value, int valueSize, const char* key ) {
 		return qtrue;
 	}
 
+	if ( !Q_stricmp( key, "trap_ODF_DemoSeekSupport" ) ) {
+		Com_sprintf( value, valueSize, "%i", CG_ODF_DEMOSEEK_SUPPORT );
+		return qtrue;
+	}
+
 	if ( !Q_stricmp( key, "trap_Key_CapsLockOn_Q3E" ) ) {
 		Com_sprintf( value, valueSize, "%i", CG_KEY_CAPSLOCK_ON );
 		return qtrue;
@@ -477,6 +483,40 @@ The cgame module is making a system call
 ====================
 */
 static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
+	// demo seeking runs the cgame without output (cl_demoseek.c)
+	if ( CLDemo_Seeking() ) {
+		switch ( args[0] ) {
+		case CG_PRINT:
+		case CG_S_STARTSOUND:
+		case CG_S_STARTLOCALSOUND:
+		case CG_S_ADDLOOPINGSOUND:
+		case CG_S_ADDREALLOOPINGSOUND:
+		case CG_S_UPDATEENTITYPOSITION:
+		case CG_S_RESPATIALIZE:
+		case CG_S_STARTBACKGROUNDTRACK:
+		case CG_R_ADDREFENTITYTOSCENE:
+		case CG_R_ADDREFENTITYTOSCENE2:
+		case CG_R_ADDPOLYTOSCENE:
+		case CG_R_ADDPOLYSTOSCENE:
+		case CG_R_ADDLIGHTTOSCENE:
+		case CG_R_ADDADDITIVELIGHTTOSCENE:
+		case CG_R_ADDLINEARLIGHTTOSCENE:
+		case CG_R_RENDERSCENE:
+		case CG_R_SETCOLOR:
+		case CG_R_DRAWSTRETCHPIC:
+			return 0;
+		}
+	} else if ( CLDemo_Quiet() ) {
+		// the frame after a smooth seek: the first snapshot fires the events of its entities
+		switch ( args[0] ) {
+		case CG_PRINT:
+		case CG_S_STARTSOUND:
+		case CG_S_STARTLOCALSOUND:
+		case CG_S_STARTBACKGROUNDTRACK:
+			return 0;
+		}
+	}
+
 	switch( args[0] ) {
 	case CG_PRINT:
 		Com_Printf( "%s", (const char*)VMA(1) );
@@ -824,6 +864,10 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		CL_Plugins_SetPlayerState( VMA(1), args[2] );
 		return 0;
 
+	case CG_ODF_DEMOSEEK_SUPPORT:
+		CLDemo_CgameSupport( args[1] );
+		return 0;
+
 	default:
 		Com_Error( ERR_DROP, "Bad cgame system trap: %ld", (long int) args[0] );
 	}
@@ -960,6 +1004,38 @@ qboolean CL_GameCommand( void ) {
 CL_CGameRendering
 =====================
 */
+void CL_CGameTimeChange( int serverTime, int snapshotNum, int serverCommandSequence ) {
+	VM_Call( cgvm, 4, CG_ODF_TIME_CHANGE, serverTime, snapshotNum, serverCommandSequence );
+}
+
+
+/*
+====================
+CL_DemoRunServerCommands
+
+Runs the server commands that have not been run yet, as the cgame would when it makes a snapshot current. Only
+the engine side effects count here (configstrings), the cgame is told about the result afterwards.
+====================
+*/
+void CL_DemoRunServerCommands( void ) {
+	while ( clc.lastExecutedServerCommand - clc.serverCommandSequence < 0 ) {
+		const int next = clc.lastExecutedServerCommand + 1;
+
+		if ( clc.serverCommandSequence - next >= MAX_RELIABLE_COMMANDS ) {
+			// cycled out: never seen by anybody
+			clc.lastExecutedServerCommand = clc.serverCommandSequence - MAX_RELIABLE_COMMANDS + 1;
+			continue;
+		}
+		CL_GetServerCommand( next );
+	}
+}
+
+
+void CL_CGameCatchUp( void ) {
+	VM_Call( cgvm, 3, CG_DRAW_ACTIVE_FRAME, cl.serverTime, STEREO_CENTER, clc.demoplaying );
+}
+
+
 void CL_CGameRendering( stereoFrame_t stereo ) {
 	VM_Call( cgvm, 3, CG_DRAW_ACTIVE_FRAME, cl.serverTime, stereo, clc.demoplaying );
 	CL_Plugins_AfterFrame();
@@ -1173,6 +1249,11 @@ void CL_SetCGameTime( void ) {
 		Com_Error( ERR_DROP, "CL_SetCGameTime: !cl.snap.valid" );
 	}
 
+	// demo seek (cl_demoseek.c) feeds the skipped snapshots through the cgame
+	if ( clc.demoplaying && CLDemo_Frame() ) {
+		return;
+	}
+
 	// allow pause in single player
 	if ( sv_paused->integer && CL_CheckPaused() && com_sv_running->integer ) {
 		// paused
@@ -1185,7 +1266,7 @@ void CL_SetCGameTime( void ) {
 	cl.oldFrameServerTime = cl.snap.serverTime;
 
 	// get our current view of time
-	demoFreezed = clc.demoplaying && com_timescale->value == 0.0f;
+	demoFreezed = clc.demoplaying && ( com_timescale->value == 0.0f || CLDemo_Paused() );
 	if ( demoFreezed ) {
 		// \timescale 0 is used to lock a demo in place for single frame advances
 		cl.serverTimeDelta -= cls.frametime;

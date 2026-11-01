@@ -67,7 +67,7 @@ CRASH CONTAINMENT (best effort)
 #define ODFC_EXPORT	__attribute__( ( visibility( "default" ) ) )
 #endif
 
-#define ODFC_API_VERSION	4
+#define ODFC_API_VERSION	5
 
 // ---------------------------------------------------------------------------
 // game constants (the values of Quake III Arena and DeFRaG)
@@ -401,6 +401,13 @@ typedef struct {
 	// clientNum field of that entity in the snapshots seen so far (-1 if it has not been in one) and ownClientNum the watched
 	// player. Dropping sounds can only take information away from the player, so it is not limited by cheats.
 	int		( *FilterSound )( int entityNum, int isLoop, int entityClientNum, int ownClientNum );
+
+	// version 5:
+
+	// The position of the demo that is playing was changed (seek, rewind, scrub with +mouseseek). fromTime and toTime are
+	// server times in ms. Time can go backwards now: drop what you kept about the frames after toTime (history of speeds,
+	// graphs, the run you were following) or start over. Not called outside demos.
+	void	( *DemoSeek )( int fromTime, int toTime );
 } odfcPluginExport_t;
 
 // The one function a plugin must export. Return NULL to refuse to load.

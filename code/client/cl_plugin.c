@@ -92,7 +92,8 @@ typedef enum {
 	PC_DRAW3D,
 	PC_DRAW2D,
 	PC_COMMAND,
-	PC_FILTERSOUND
+	PC_FILTERSOUND,
+	PC_DEMOSEEK
 } callKind_t;
 
 typedef struct {
@@ -107,6 +108,7 @@ typedef struct {
 	const char					*cmdName;	// PC_COMMAND
 	int							sound[4];	// PC_FILTERSOUND: entityNum, isLoop, entityClientNum, ownClientNum
 	int							soundResult;	// PC_FILTERSOUND
+	int							seek[2];	// PC_DEMOSEEK: fromTime, toTime
 } call_t;
 
 static void CallThunk( void *arg )
@@ -124,6 +126,7 @@ static void CallThunk( void *arg )
 	case PC_DRAW2D:			e->Draw2D( c->phase ); break;
 	case PC_COMMAND:		e->Command( c->cmdName ); break;
 	case PC_FILTERSOUND:	c->soundResult = e->FilterSound( c->sound[0], c->sound[1], c->sound[2], c->sound[3] ); break;
+	case PC_DEMOSEEK:		e->DemoSeek( c->seek[0], c->seek[1] ); break;
 	}
 }
 
@@ -139,6 +142,7 @@ static const char *CallDescription( const call_t *c )
 	case PC_DRAW2D:			return "Draw2D";
 	case PC_COMMAND:		return "Command";
 	case PC_FILTERSOUND:	return "FilterSound";
+	case PC_DEMOSEEK:		return "DemoSeek";
 	}
 	return "?";
 }
@@ -1324,6 +1328,16 @@ void CL_Plugins_MapLoad( const char *mapName )
 	published = qfalse;
 	SoundOwners_Reset();
 	PLUGINS_RUN( PC_MAPLOAD, MapLoad, call_.mapName = name; );
+}
+
+// the demo that is playing jumped (cl_demoseek.c)
+void CL_Plugins_DemoSeek( int fromTime, int toTime )
+{
+	if ( !numPlugins || !mapLoaded ) {
+		return;
+	}
+	published = qfalse;
+	PLUGINS_RUN( PC_DEMOSEEK, DemoSeek, call_.seek[0] = fromTime; call_.seek[1] = toTime; );
 }
 
 void CL_Plugins_CGameShutdown( void )

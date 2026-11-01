@@ -450,6 +450,23 @@ void CL_StartHunkUsers( void );
 
 void CL_Disconnect_f( void );
 void CL_ReadDemoMessage( void );
+
+// cl_demoseek.c
+void		CLDemo_Init( void );
+void		CLDemo_Start( const char *arg, const char *path );
+qboolean	CLDemo_Frame( void );
+qboolean	CLDemo_Paused( void );
+qboolean	CLDemo_Seeking( void );
+qboolean	CLDemo_KeyDown( int key );
+qboolean	CLDemo_KeyUp( int key );
+qboolean	CLDemo_MouseEvent( int dx, int dy );
+void		CLDemo_DrawBar( void );
+void		CLDemo_MessageParsed( void );
+void		CLDemo_CgameSupport( int version );
+void		CLDemo_CgameShutdown( void );
+void		CLDemo_Free( void );
+qboolean	CLDemo_Quiet( void );
+qboolean	CLDemo_SeekBusy( void );
 void CL_StopRecord_f( void );
 
 // cl_auth.c - key-pair login
@@ -471,6 +488,7 @@ int CL_Plugins_Info( int index, int field, char *out, int outSize );
 int CL_Plugins_SetEnabled( const char *name, int enable );
 void CL_Plugins_Rescan( void );
 void CL_Plugins_CGameShutdown( void );
+void CL_Plugins_DemoSeek( int fromTime, int toTime );
 void CL_Plugins_SetPlayerState( const playerState_t *ps, int viewFlags );
 qboolean CL_Plugins_FilterSound( int entityNum, qboolean isLoop );
 void CL_Plugins_BeforeScene( const refdef_t *fd );
@@ -600,6 +618,9 @@ void CL_InitCGame( void );
 void CL_ShutdownCGame( void );
 qboolean CL_GameCommand( void );
 void CL_CGameRendering( stereoFrame_t stereo );
+void CL_CGameCatchUp( void );	// one cgame frame for demo seeking: no rendering, sound or printing
+void CL_CGameTimeChange( int serverTime, int snapshotNum, int serverCommandSequence );	// CG_ODF_TIME_CHANGE
+void CL_DemoRunServerCommands( void );	// executes the pending server commands in the engine only (configstrings), the cgame never sees them
 void CL_SetCGameTime( void );
 
 //

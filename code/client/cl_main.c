@@ -578,6 +578,12 @@ static void CL_Record_f( void ) {
 		return;
 	}
 
+	// a demo that is being seeked is not recorded: the file would have the jump in it
+	if ( CLDemo_SeekBusy() ) {
+		Com_Printf( "Can't record while the demo is seeking.\n" );
+		return;
+	}
+
 	// sync 0 doesn't prevent recording, so not forcing it off .. everyone does g_sync 1 ; record ; g_sync 0 ..
 	if ( NET_IsLocalAddress( &clc.serverAddress ) && !Cvar_VariableIntegerValue( "g_synchronousClients" ) ) {
 		Com_Printf (S_COLOR_YELLOW "WARNING: You should set 'g_synchronousClients 1' for smoother demo recording\n");
@@ -761,6 +767,8 @@ void CL_ReadDemoMessage( void ) {
 			CL_WriteSnapshot();
 		}
 	}
+
+	CLDemo_MessageParsed();
 }
 
 
@@ -932,6 +940,7 @@ static void CL_PlayDemo_f( void ) {
 
 	cls.state = CA_CONNECTED;
 	clc.demoplaying = qtrue;
+	CLDemo_Start( arg, name );
 	Q_strncpyz( cls.servername, shortname, sizeof( cls.servername ) );
 
 	if ( protocol <= OLD_PROTOCOL_VERSION )
@@ -1221,6 +1230,7 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 
 	// Stop demo playback
 	if ( clc.demofile != FS_INVALID_HANDLE ) {
+		CLDemo_Free();
 		FS_FCloseFile( clc.demofile );
 		clc.demofile = FS_INVALID_HANDLE;
 	}
@@ -4102,6 +4112,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("record", CL_Record_f);
 	Cmd_SetCommandCompletionFunc( "record", CL_CompleteRecordName );
 	Cmd_AddCommand ("demo", CL_PlayDemo_f);
+	CLDemo_Init();
 	Cmd_SetCommandCompletionFunc( "demo", CL_CompleteDemoName );
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);

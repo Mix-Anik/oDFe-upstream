@@ -380,6 +380,8 @@ void CL_MouseEvent( int dx, int dy /*, int time*/ ) {
 		VM_Call( uivm, 2, UI_MOUSE_EVENT, (int)mdx, (int)mdy );
 	} else if ( Key_GetCatcher() & KEYCATCH_CGAME ) {
 		VM_Call( cgvm, 2, CG_MOUSE_EVENT, dx, dy );
+	} else if ( clc.demoplaying && CLDemo_MouseEvent( dx, dy ) ) {
+		// moved the demo timeline cursor
 	} else {
 		cl.mouseDx[cl.mouseIndex] += dx;
 		cl.mouseDy[cl.mouseIndex] += dy;
