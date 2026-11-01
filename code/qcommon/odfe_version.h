@@ -7,7 +7,7 @@ updater (cl_update.c). Raise it before tagging a release; minor and patch must s
 #define __ODFE_VERSION_H
 
 #define ODFE_VERSION_MAJOR		1
-#define ODFE_VERSION_MINOR		0
+#define ODFE_VERSION_MINOR		1
 #define ODFE_VERSION_PATCH		0
 
 #define ODFE_VERSION_NUMBER		( ODFE_VERSION_MAJOR * 10000 + ODFE_VERSION_MINOR * 100 + ODFE_VERSION_PATCH )
