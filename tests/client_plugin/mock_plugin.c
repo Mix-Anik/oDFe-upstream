@@ -1,20 +1,47 @@
 /*
-A stand-in for a client plugin, controlled by the test program through the exported Mock_State.
+A stand-in for a client plugin (a QVM program), controlled by the test program through mock_state.h.
 It records what the engine hands it, and tries the drawing calls in phases where they must be ignored.
 */
 
-#include <stddef.h>
-#include <stdio.h>
-#include <string.h>
+// the cvars and commands of a plugin are its own: each variant of this plugin gets its own names
+#ifndef PFX
+#define PFX "mock"
+#endif
 
+#if defined( BAD_VERSION )
+#define ODF_PLUGIN_VERSION "future"
+#define ODF_PLUGIN_API "99"
+#elif defined( SECOND )
+#define ODF_PLUGIN_VERSION "second 1.0"
+#else
+#define ODF_PLUGIN_VERSION "mock 1.0"
+#endif
+
+#define EXPORTS( X ) X(OnInit) X(OnShutdown) X(OnMapLoad) X(OnCgameShutdown) X(OnDraw3D) X(OnDraw2D) X(OnCommand) X(OnFilterSound)
+
+// the entry point has to come first
+#include "odfc_entry.h"
 #include "mock_state.h"
 
-static const odfcPluginImport_t *eng;
+// the two calls only the test build of the engine has (the asm file is made by run.sh)
+extern void TestPull( void *state, int size );
+extern void TestPush( const void *state, int size );
+
 static mockState_t st;
 static int shader;
-static volatile int *volatile nullPtr;
 
-ODFC_EXPORT mockState_t *Mock_State( void ) { return &st; }
+static void Copy( char *dst, const char *src, int size )
+{
+	int i;
+
+	for ( i = 0; i < size - 1 && src[i]; i++ ) {
+		dst[i] = src[i];
+	}
+	dst[i] = '\0';
+}
+
+static void Begin( void ) { TestPull( &st, (int)sizeof( st ) ); }
+static void End( void ) { TestPush( &st, (int)sizeof( st ) ); }
 
 static const float lineA[3] = { 0, 0, 0 }, lineB[3] = { 100, 0, 0 };
 
@@ -22,8 +49,8 @@ static void TryDrawing2D( void )
 {
 	static const float white[4] = { 1, 1, 1, 1 };
 
-	eng->SetColor( white );
-	eng->DrawStretchPic( 1, 2, 3, 4, 0, 0, 1, 1, shader );
+	SetColor( white );
+	DrawStretchPic( 1, 2, 3, 4, 0, 0, 1, 1, shader );
 }
 
 static void TryDrawing3D( void )
@@ -31,117 +58,162 @@ static void TryDrawing3D( void )
 	odfcPolyVert_t v[3];
 	static const unsigned char rgba[4] = { 255, 0, 0, 255 };
 
-	memset( v, 0, sizeof( v ) );
+	MemSet( v, 0, sizeof( v ) );
 	v[0].xyz[0] = 5;
-	eng->AddPoly( shader, 3, v );
-	eng->AddBeam( shader, lineA, lineB, rgba );
+	AddPoly( shader, 3, v );
+	AddBeam( shader, lineA, lineB, rgba );
 }
 
 static const float modelOrigin[3] = { 70, 0, 0 }, modelAngles[3] = { 0, 90, 0 };
 
-static void Command( const char *name )
+void OnCommand( const char *name )
 {
 	char buf[32];
 
+	Begin();
 	st.commandCalls++;
-	snprintf( st.commandName, sizeof( st.commandName ), "%s", name );
-	st.commandArgc = eng->CommandArgc();
-	eng->CommandArgv( 1, buf, sizeof( buf ) );
-	snprintf( st.commandArg1, sizeof( st.commandArg1 ), "%s", buf );
-	if ( st.crashInCommand ) {
-		*nullPtr = 1;
+	Copy( st.commandName, name, sizeof( st.commandName ) );
+	st.commandArgc = CommandArgc();
+	CommandArgv( 1, buf, sizeof( buf ) );
+	Copy( st.commandArg1, buf, sizeof( st.commandArg1 ) );
+	if ( st.loopInCommand ) {
+		volatile int spin = 0;
+
+		for ( ;; ) {
+			spin++;
+		}
 	}
+	End();
 }
 
-static int FilterSound( int entityNum, int isLoop, int entityClientNum, int ownClientNum )
+int OnFilterSound( int entityNum, int isLoop, int entityClientNum, int ownClientNum )
 {
+	int result;
+
+	Begin();
 	st.filterCalls++;
 	st.filterArgs[0] = entityNum;
 	st.filterArgs[1] = isLoop;
 	st.filterArgs[2] = entityClientNum;
 	st.filterArgs[3] = ownClientNum;
-	return st.filterResult;
+	result = st.filterResult;
+	End();
+	return result;
 }
 
-static int Init( void )
+int OnInit( void )
 {
 	char buf[64];
 
-	eng->CvarRegister( "mock_rom", "fixed", ODFC_CVAR_ROM );
-	st.cmdRegistered = eng->CommandRegister( "mock_cmd" );
-	st.cmdBadName = eng->CommandRegister( "Bad Name" );
-	st.cmdTaken = eng->CommandRegister( "quit" );
-	st.cmdSecond = eng->CommandRegister( "mock_cmd" );
+	Begin();
+	CvarRegister( PFX "_rom", "fixed", ODFC_CVAR_ROM );
+	st.cmdRegistered = CommandRegister( PFX "_cmd" );
+	st.cmdBadName = CommandRegister( "Bad Name" );
+	st.cmdTaken = CommandRegister( "quit" );
+	st.cmdSecond = CommandRegister( PFX "_cmd" );
 
 	st.initCalls++;
-	eng->CvarRegister( "mock_setting", "5", ODFC_CVAR_ARCHIVE );
-	st.cvarDefault = eng->CvarInteger( "mock_setting" );
-	st.cvarValue = eng->CvarValue( "mock_float" );
-	eng->CvarString( "mock_secret", buf, sizeof( buf ) );
-	snprintf( st.secretSeen, sizeof( st.secretSeen ), "%s", buf );
-	eng->CvarString( "mock_visible", buf, sizeof( buf ) );
-	snprintf( st.visibleSeen, sizeof( st.visibleSeen ), "%s", buf );
+	CvarRegister( PFX "_setting", "5", ODFC_CVAR_ARCHIVE );
+	st.cvarDefault = CvarInteger( PFX "_setting" );
+	// the test program set these before the plugin started, as a config file would
+	CvarRegister( PFX "_float", "0", 0 );
+	CvarRegister( PFX "_visible", "no", 0 );
+	CvarRegister( PFX "_secret", "open", 0 );		// is the engine's private cvar now: it must stay out of reach
+	st.cvarValue = CvarValue( PFX "_float" );
+	CvarString( PFX "_secret", buf, sizeof( buf ) );
+	Copy( st.secretSeen, buf, sizeof( st.secretSeen ) );
+	CvarString( PFX "_visible", buf, sizeof( buf ) );
+	Copy( st.visibleSeen, buf, sizeof( st.visibleSeen ) );
+	// not the plugin's and not on the list of readable settings
+	CvarString( "rconpassword", buf, sizeof( buf ) );
+	Copy( st.notOwnedSeen, buf, sizeof( st.notOwnedSeen ) );
+	CvarString( "cg_draw2D", buf, sizeof( buf ) );
+	Copy( st.readableSeen, buf, sizeof( st.readableSeen ) );
+	// names of the game cannot be taken over
+	CvarRegister( "cg_mock_evil", "1", 0 );
+	CvarString( "cg_mock_evil", buf, sizeof( buf ) );
+	st.cvarReserved = buf[0] != '\0';
+	End();
+#ifdef REFUSE
+	return 1;
+#else
 	return 0;
+#endif
 }
 
-static void Shutdown( void )
+void OnShutdown( void )
 {
+	Begin();
 	st.shutdownCalls++;
-	eng->Print( "bye" );
+	Print( "bye" );
+	End();
 }
 
-static void MapLoad( const char *mapName )
+void OnMapLoad( const char *mapName )
 {
+	Begin();
 	st.mapLoads++;
-	snprintf( st.lastMap, sizeof( st.lastMap ), "%s", mapName );
-	shader = eng->RegisterShader( "railCore" );
+	Copy( st.lastMap, mapName, sizeof( st.lastMap ) );
+	shader = RegisterShader( "railCore" );
 	st.mapLoadShader = shader;
-	st.modelHandle = eng->RegisterModel( "models/test.md3" );
+	st.modelHandle = RegisterModel( "models/test.md3" );
 	TryDrawing3D();		// not allowed here: must not reach the renderer
 	TryDrawing2D();
+	End();
 }
 
-static void CGameShutdown( void )
+void OnCgameShutdown( void )
 {
+	Begin();
 	st.cgameShutdowns++;
+	End();
 }
 
-static void Draw3D( const odfcView_t *view )
+void OnDraw3D( const odfcView_t *view )
 {
 	volatile float zero = 0.0f;
 	float nan = zero / zero, bad[3], mins[3] = { -1, -1, -1 }, maxs[3] = { 1, 1, 1 };
 
+	Begin();
 	st.draw3d++;
 	st.view = *view;
 	if ( st.crashInDraw3D ) {
-		*nullPtr = 1;
+		{
+			volatile int zero2 = 0;
+
+			st.cmdTaken = 1 / zero2;		// a division the processor traps on: the plugin is stopped
+		}
 	}
-	st.snapOk = eng->GetSnapshot( &st.snap );
-	st.cheatsFlag = eng->CheatsEnabled();
-	st.psOk = eng->GetPlayerState( &st.ps );
-	st.msOk = eng->GetMoveState( &st.ms );
+	if ( st.badPointerInDraw3D ) {
+		GetSnapshot( (odfcSnapshot_t *)0x7ffffff0 );		// the engine must not touch it
+	}
+	st.snapOk = GetSnapshot( &st.snap );
+	st.cheatsFlag = CheatsEnabled();
+	st.psOk = GetPlayerState( &st.ps );
+	st.msOk = GetMoveState( &st.ms );
 	{
 		float low[3] = { 0, 0, -50 }, high[3] = { 0, 0, 50 }, nanPoint[3];
 
 		nanPoint[0] = nan; nanPoint[1] = 0; nanPoint[2] = -50;
-		st.contentsLow = eng->PointContents( low );
-		st.contentsHigh = eng->PointContents( high );
-		st.contentsNaN = eng->PointContents( nanPoint );
+		st.contentsLow = PointContents( low );
+		st.contentsHigh = PointContents( high );
+		st.contentsNaN = PointContents( nanPoint );
 	}
 
-	eng->Trace( &st.traceGood, lineA, mins, maxs, lineB, ODFC_MASK_SHOT );
+	Trace( &st.traceGood, lineA, mins, maxs, lineB, ODFC_MASK_SHOT );
 	bad[0] = nan; bad[1] = 0; bad[2] = 0;
-	eng->Trace( &st.traceNaN, bad, NULL, NULL, lineB, ODFC_MASK_SHOT );
-	eng->Trace( &st.traceNull, NULL, NULL, NULL, lineB, ODFC_MASK_SHOT );
+	Trace( &st.traceNaN, bad, NULL, NULL, lineB, ODFC_MASK_SHOT );
 
 	TryDrawing3D();
 	TryDrawing2D();		// not allowed here
-	st.weaponOk = eng->GetWeaponState( &st.weapons );
-	eng->DrawModel( 1, 2, 3, 4, st.modelHandle, modelOrigin, modelAngles, 100 );		// 2D only: dropped here
+	st.weaponOk = GetWeaponState( &st.weapons );
+	DrawModel( 1, 2, 3, 4, st.modelHandle, modelOrigin, modelAngles, 100 );		// 2D only: dropped here
+	End();
 }
 
-static void Draw2D( int phase )
+void OnDraw2D( int phase )
 {
+	Begin();
 	st.draw2d++;
 	if ( st.numPhases < 8 ) {
 		st.phases[st.numPhases++] = phase;
@@ -149,31 +221,7 @@ static void Draw2D( int phase )
 	TryDrawing2D();
 	TryDrawing3D();		// not allowed here
 	if ( st.modelHandle ) {
-		eng->DrawModel( 10, 20, 30, 40, st.modelHandle, modelOrigin, modelAngles, 100 );
+		DrawModel( 10, 20, 30, 40, st.modelHandle, modelOrigin, modelAngles, 100 );
 	}
-}
-
-static odfcPluginExport_t exports = {
-	sizeof( odfcPluginExport_t ), ODFC_API_VERSION, "mock", "mock 1.0",
-	Init, Shutdown, MapLoad, CGameShutdown, Draw3D, Draw2D, Command, FilterSound
-};
-
-ODFC_EXPORT const odfcPluginExport_t *ODF_ClientPluginEntry( const odfcPluginImport_t *imp )
-{
-	eng = imp;
-#ifdef BAD_VERSION
-	exports.apiVersion = ODFC_API_VERSION + 1;
-#endif
-#ifdef BAD_SIZE
-	exports.size = sizeof( int );
-#endif
-#ifdef OLD_EXPORTS
-	// built for version 3: the table ends with Draw2D
-	exports.size = (int)offsetof( odfcPluginExport_t, Command );
-	exports.apiVersion = 3;
-#endif
-#ifdef REFUSE
-	return NULL;
-#endif
-	return &exports;
+	End();
 }

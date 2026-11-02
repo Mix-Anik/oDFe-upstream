@@ -18,7 +18,7 @@ Message from the client:
 */
 
 #include "server.h"
-#include "odf_plugin_api.h"
+#include "../plugin_api/include/odfs_types.h"
 #include "../qcommon/auth_proto.h"
 
 #define AUTH_ANSWER_TIME	30000	// ms the client has to answer a challenge

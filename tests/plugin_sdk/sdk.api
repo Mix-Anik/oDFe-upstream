@@ -1,0 +1,14 @@
+# What the tests of the SDK library need from the harness: a report of failures and the C library of the host to compare with.
+
+module odft
+version 1
+types odft_types.h
+
+import Report( text: str )
+import HostFormatFloat( out: outbuf(size), size: i32, format: str, value: f32 )
+import HostFormatInt( out: outbuf(size), size: i32, format: str, value: i32 )
+import HostStrtof( text: str ) -> f32
+
+export OnRun( x: i32 ) -> i32
+
+include ../../code/plugin_api/common.api

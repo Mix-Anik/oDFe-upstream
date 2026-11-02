@@ -446,7 +446,7 @@ void SV_BotInitBotLib(void);
 
 //============================================================
 //
-// sv_plugin.c - native plugins, see odf_plugin_api.h
+// sv_plugin.c - sandboxed plugins, see code/plugin_api/server.api
 //
 
 void		SV_Plugins_Init( void );

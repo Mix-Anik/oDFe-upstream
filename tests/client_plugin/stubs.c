@@ -7,6 +7,7 @@ counts what it is given, a fake collision trace, and the client state (cl, clc, 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -81,7 +82,7 @@ void QDECL Com_Error( errorParm_t code, const char *fmt, ... )
 
 // ---- cvars ----
 
-#define MAX_STUB_CVARS 32
+#define MAX_STUB_CVARS 256
 static cvar_t stubCvars[MAX_STUB_CVARS];
 static char stubCvarNames[MAX_STUB_CVARS][64];
 static char stubCvarValues[MAX_STUB_CVARS][256];
@@ -99,11 +100,14 @@ static cvar_t *FindCvar( const char *name )
 	return NULL;
 }
 
-void Test_SetCvar( const char *name, const char *value, int flags )
+static void SetCvar( const char *name, const char *value, int flags )
 {
 	cvar_t *c = FindCvar( name );
 
 	if ( !c ) {
+		if ( numStubCvars >= MAX_STUB_CVARS ) {
+			Com_Error( ERR_FATAL, "the test has too many cvars" );
+		}
 		c = &stubCvars[numStubCvars];
 		snprintf( stubCvarNames[numStubCvars], 64, "%s", name );
 		c->name = stubCvarNames[numStubCvars];
@@ -115,14 +119,35 @@ void Test_SetCvar( const char *name, const char *value, int flags )
 	c->flags = flags;
 }
 
+// what the player's config files do before the engine knows a cvar: it exists, flagged as made by the user
+void Test_SetCvar( const char *name, const char *value, int flags )
+{
+	SetCvar( name, value, ( flags & CVAR_PRIVATE ) ? flags : ( flags | CVAR_USER_CREATED ) );
+}
+
+unsigned Cvar_Flags( const char *name )
+{
+	cvar_t *c = FindCvar( name );
+
+	return c ? (unsigned)c->flags : CVAR_NONEXISTENT;
+}
+
 cvar_t *Cvar_Get( const char *name, const char *value, int flags )
 {
+	cvar_t *c;
+
 	stCvarFlagsLast = flags;
-	if ( ( flags & CVAR_ROM ) && FindCvar( name ) ) {
-		Test_SetCvar( name, value, flags );		// a ROM cvar always has the value the program gives
-	}
-	if ( !FindCvar( name ) ) {
-		Test_SetCvar( name, value, flags );
+	c = FindCvar( name );
+	if ( !c ) {
+		SetCvar( name, value, flags );
+	} else {
+		int old = c->flags & ~CVAR_USER_CREATED;		// like the engine: the code now owns it, the user's value stays
+
+		if ( flags & CVAR_ROM ) {
+			SetCvar( name, value, old | flags );		// a ROM cvar always has the value the program gives
+		} else {
+			c->flags = old | flags;
+		}
 	}
 	return FindCvar( name );
 }
@@ -271,15 +296,22 @@ void Sys_FreeFileList( char **list )
 
 int Sys_Milliseconds( void ) { return 0; }
 
+int64_t Sys_Microseconds( void )
+{
 #ifdef _WIN32
-void *Sys_LoadLibrary( const char *name ) { return (void *)LoadLibraryA( name ); }
-void *Sys_LoadFunction( void *handle, const char *name ) { return (void *)GetProcAddress( (HMODULE)handle, name ); }
-void Sys_UnloadLibrary( void *handle ) { if ( handle ) FreeLibrary( (HMODULE)handle ); }
+	LARGE_INTEGER freq, now;
+
+	QueryPerformanceFrequency( &freq );
+	QueryPerformanceCounter( &now );
+	return now.QuadPart * 1000000 / freq.QuadPart;
 #else
-void *Sys_LoadLibrary( const char *name ) { return dlopen( name, RTLD_NOW ); }
-void *Sys_LoadFunction( void *handle, const char *name ) { return dlsym( handle, name ); }
-void Sys_UnloadLibrary( void *handle ) { if ( handle ) dlclose( handle ); }
+	struct timespec ts;
+
+	clock_gettime( CLOCK_MONOTONIC, &ts );
+	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 #endif
+}
+
 
 // ---- collision: every trace stops half way, on a floor ----
 
@@ -388,3 +420,42 @@ void Stubs_InitRenderer( void )
 	re.ClearScene = R_ClearScene;
 	re.RenderScene = R_RenderScene;
 }
+
+// ---------------------------------------------------------------------------
+// what the VM code of the engine (vm.c, vm_x86.c, vm_interpreted.c) links against: plugins are loaded through plugin_vm.c only
+// ---------------------------------------------------------------------------
+
+static cvar_t vmChecksCvar;
+
+__attribute__( ( constructor ) ) static void InitVMChecks( void )
+{
+	vmChecksCvar.integer = 15;
+	vmChecksCvar.value = 15;
+	vm_rtChecks = &vmChecksCvar;
+}
+
+void *Z_Malloc( size_t size )
+{
+	void *p = calloc( 1, size ? size : 1 );
+
+	if ( !p ) {
+		Com_Error( ERR_FATAL, "out of memory" );
+	}
+	return p;
+}
+
+void Z_Free( void *ptr ) { free( ptr ); }
+void *Hunk_Alloc( size_t size, ha_pref preference ) { return Z_Malloc( size ); }
+int Hunk_MemoryRemaining( void ) { return 0; }
+int FS_FOpenFileRead( const char *qpath, fileHandle_t *file, qboolean uniqueFILE ) { return -1; }
+int FS_Read( void *buffer, int len, fileHandle_t f ) { return 0; }
+void FS_FCloseFile( fileHandle_t f ) {}
+int FS_ReadFile( const char *qpath, void **buffer ) { *buffer = NULL; return -1; }
+void FS_FreeFile( void *buffer ) {}
+void *FS_LoadLibrary( const char *name ) { return NULL; }
+void *Sys_LoadFunction( void *handle, const char *name ) { return NULL; }
+void Sys_UnloadLibrary( void *handle ) {}
+cvar_t *com_developer;
+int fs_lastPakIndex;
+int CPU_Flags;
+int Cvar_VariableIntegerValue( const char *var_name ) { return 0; }

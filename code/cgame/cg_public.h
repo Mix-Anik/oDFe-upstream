@@ -187,7 +187,7 @@ typedef enum {
 	CG_TRAP_GETVALUE = COM_TRAP_GETVALUE,
 
 	// oDFe extensions, found by name with trap_GetValue
-	CG_ODF_SET_PLAYERSTATE = 710,	// void trap_ODF_SetPlayerState( const playerState_t *ps, int viewFlags ): hands the predicted player state and what the view is to the client plugins (ODFC_VIEW_* of odf_client_plugin_api.h)
+	CG_ODF_SET_PLAYERSTATE = 710,	// void trap_ODF_SetPlayerState( const playerState_t *ps, int viewFlags ): hands the predicted player state and what the view is to the client plugins (ODFC_VIEW_* of code/plugin_api/include/odfc_types.h)
 	CG_ODF_DEMOSEEK_SUPPORT = 711	// void trap_ODF_DemoSeekSupport( int version ): the cgame takes CG_ODF_TIME_CHANGE, so the engine may jump around in a demo (cl_demoseek.c)
 
 } cgameImport_t;

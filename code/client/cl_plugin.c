@@ -1,29 +1,25 @@
 /*
 ===========================================================================
-Native client plugins: loading, calling them with a crash guard and giving them a
-read-only view of the game. The interface is in odf_client_plugin_api.h.
-
-The crash guard is the one of the server plugins (sv_plugin_guard.c).
+Client plugins: QVM programs that run in a sandbox and add HUD elements and helpers
+to the player's game. A plugin can only do what the functions it imports do, and those show
+nothing but what the player's own game shows (the interface is in code/plugin_api/client.api,
+the sandbox in plugin_vm.c). A plugin has no files, no network and no way to touch engine memory.
 ===========================================================================
 */
 
 #include "client.h"
 #include "../qcommon/cm_public.h"
-#include "../server/sv_plugin_guard.h"
-#include "odf_client_plugin_api.h"
+#include "../qcommon/plugin_vm.h"
+#include "../plugin_api/include/odfc_types.h"
 
-#ifdef _WIN32
-#define PLUGIN_EXT	".dll"
-#elif defined( __APPLE__ )
-#define PLUGIN_EXT	".dylib"
-#else
-#define PLUGIN_EXT	".so"
-#endif
-
+#define PLUGIN_EXT			".qvm"
 #define MAX_PLUGINS			64
 #define MAX_PLUGIN_NAME		256
 #define DISABLED_FILE		"disabled"		// in the plugins folder: the names of the plugins that are switched off
 #define MAX_POLY_VERTS		64
+#define MAX_PLUGIN_CVARS	64
+#define MAX_CVAR_NAME		48
+#define MAX_MODULE_FILE		( 8 * 1024 * 1024 )
 
 // the API structs are copied to renderer structs byte by byte
 typedef char odfcPolyVertSize_t[ sizeof( odfcPolyVert_t ) == sizeof( polyVert_t ) ? 1 : -1 ];
@@ -35,22 +31,22 @@ typedef enum {
 	PS_RUNNING,
 	PS_STOPPED,		// shut down normally
 	PS_FAILED,		// did not load or refused to start
-	PS_FAULTED,		// crashed, never called again
+	PS_FAULTED,		// trapped or ran out of its budget, stopped
 	PS_DISABLED		// switched off, not loaded
 } pluginState_t;
 
 typedef struct {
 	char						name[MAX_PLUGIN_NAME];
 	char						path[MAX_OSPATH];
-	void						*lib;
-	const odfcPluginExport_t	*exp;
-	pluginRange_t				range;
-	qboolean					guarded;
+	pluginVM_t				*vm;
 	pluginState_t				state;
 	char						note[192];		// why it is not running
+	char						version[64];	// from its manifest
 	qboolean					disabled;		// switched off by the player (kept in the disabled file)
-	qboolean					hidden;			// a library without a client plugin in it: not shown
-	qboolean					notClient;		// set while loading when the library is not a client plugin
+	qboolean					hidden;			// a module that is not a client plugin (a server plugin): not shown
+	qboolean					notClient;		// set while loading when the module is not a client plugin
+	char						cvars[MAX_PLUGIN_CVARS][MAX_CVAR_NAME];		// the cvars it created
+	int							numCvars;
 } plugin_t;
 
 // what the plugin is allowed to draw right now
@@ -62,10 +58,7 @@ typedef enum {
 
 static plugin_t				plugins[MAX_PLUGINS];
 static int					numPlugins;
-static plugin_t				*current;		// the plugin whose code is running, for log prefixes
-static odfcPluginImport_t	imports;
-static qboolean				guardInstalled;
-static qboolean				guardTried;
+static plugin_t				*current;		// the plugin whose code is running, for log prefixes and the cvars it may use
 static char					loadedMap[MAX_QPATH];		// the map of the game module that is running
 static char					disabledNames[MAX_PLUGINS][MAX_PLUGIN_NAME];		// what the disabled file said when it was read or written
 static int					numDisabledNames;
@@ -78,143 +71,79 @@ static int					publishedTime;
 static qboolean				published;
 static int					publishedViewFlags;
 
+static qboolean CheatsAllowed( void );
+#define ODF_CheatsAllowed CheatsAllowed
+#include "../plugin_api/generated/cl_plugin_api.inc"
+#include "../plugin_api/plugin_common_imp.h"
+
+// the player's own plugins get every capability there is
+#define ODFC_CAPS_ALL		( ( 1u << ODFC_NUM_CAPS ) - 1 )
+
+#ifdef ODF_PLUGIN_TESTS
+// Two calls that only the test build has: the mock plugin keeps its state in the test program, outside of its sandbox.
+extern void Test_MirrorPull( const char *plugin, void *dst, int size );
+extern void Test_MirrorPush( const char *plugin, const void *src, int size );
+#define ODFC_TEST_PULL	ODFC_NUM_IMPORTS
+#define ODFC_TEST_PUSH	( ODFC_NUM_IMPORTS + 1 )
+#endif
+
+// what a plugin calls goes through here
+static intptr_t Plugin_Dispatch( pluginVM_t *vm, intptr_t *args )
+{
+#ifdef ODF_PLUGIN_TESTS
+	if ( args[0] == ODFC_TEST_PULL || args[0] == ODFC_TEST_PUSH ) {
+		void *p = NULL;
+
+		if ( args[2] > 0 ) {
+			PluginVM_Ptr( vm, args[1], (unsigned)args[2], 1, qfalse, &p );
+			if ( args[0] == ODFC_TEST_PULL ) {
+				Test_MirrorPull( current->name, p, (int)args[2] );
+			} else {
+				Test_MirrorPush( current->name, p, (int)args[2] );
+			}
+		}
+		return 0;
+	}
+#endif
+	return Odfc_Dispatch( vm, args );
+}
+
 
 // ---------------------------------------------------------------------------
-// guarded calls into a plugin
+// calls into a plugin
 // ---------------------------------------------------------------------------
 
-typedef enum {
-	PC_ENTRY,
-	PC_INIT,
-	PC_SHUTDOWN,
-	PC_MAPLOAD,
-	PC_CGAMESHUTDOWN,
-	PC_DRAW3D,
-	PC_DRAW2D,
-	PC_COMMAND,
-	PC_FILTERSOUND,
-	PC_DEMOSEEK
-} callKind_t;
+static void Plugin_Fault( plugin_t *p, const char *what );
 
-typedef struct {
-	callKind_t					kind;
-	plugin_t					*plugin;
-	odfcPluginEntry_t			entry;		// PC_ENTRY
-	const odfcPluginExport_t	*result;	// PC_ENTRY
-	int							rc;			// PC_INIT
-	const char					*mapName;	// PC_MAPLOAD
-	const odfcView_t			*view;		// PC_DRAW3D
-	int							phase;		// PC_DRAW2D
-	const char					*cmdName;	// PC_COMMAND
-	int							sound[4];	// PC_FILTERSOUND: entityNum, isLoop, entityClientNum, ownClientNum
-	int							soundResult;	// PC_FILTERSOUND
-	int							seek[2];	// PC_DEMOSEEK: fromTime, toTime
-} call_t;
-
-static void CallThunk( void *arg )
-{
-	call_t *c = (call_t *)arg;
-	const odfcPluginExport_t *e = c->plugin->exp;
-
-	switch ( c->kind ) {
-	case PC_ENTRY:			c->result = c->entry( &imports ); break;
-	case PC_INIT:			c->rc = e->Init(); break;
-	case PC_SHUTDOWN:		e->Shutdown(); break;
-	case PC_MAPLOAD:		e->MapLoad( c->mapName ); break;
-	case PC_CGAMESHUTDOWN:	e->CGameShutdown(); break;
-	case PC_DRAW3D:			e->Draw3D( c->view ); break;
-	case PC_DRAW2D:			e->Draw2D( c->phase ); break;
-	case PC_COMMAND:		e->Command( c->cmdName ); break;
-	case PC_FILTERSOUND:	c->soundResult = e->FilterSound( c->sound[0], c->sound[1], c->sound[2], c->sound[3] ); break;
-	case PC_DEMOSEEK:		e->DemoSeek( c->seek[0], c->seek[1] ); break;
-	}
-}
-
-static const char *CallDescription( const call_t *c )
-{
-	switch ( c->kind ) {
-	case PC_ENTRY:			return "ODF_ClientPluginEntry";
-	case PC_INIT:			return "Init";
-	case PC_SHUTDOWN:		return "Shutdown";
-	case PC_MAPLOAD:		return "MapLoad";
-	case PC_CGAMESHUTDOWN:	return "CGameShutdown";
-	case PC_DRAW3D:			return "Draw3D";
-	case PC_DRAW2D:			return "Draw2D";
-	case PC_COMMAND:		return "Command";
-	case PC_FILTERSOUND:	return "FilterSound";
-	case PC_DEMOSEEK:		return "DemoSeek";
-	}
-	return "?";
-}
-
-/*
-===============
-Plugin_Fault
-
-A plugin crashed: it is never called again.
-===============
-*/
-static void Plugin_Fault( plugin_t *p, const call_t *c, const pluginFault_t *f )
-{
-	Com_sprintf( p->note, sizeof( p->note ), "crashed in %s: %s at offset 0x%lx", CallDescription( c ), f->what, (unsigned long)f->offset );
-	p->state = PS_FAULTED;
-
-	Com_Printf( S_COLOR_RED "Plugin '%s' crashed in %s: %s at %s+0x%lx, accessing 0x%lx.\n"
-		S_COLOR_RED "The plugin has been stopped and will not run again until the game is restarted.\n",
-		p->name, CallDescription( c ), f->what, p->path, (unsigned long)f->offset, (unsigned long)f->dataAddress );
-}
-
-/*
-===============
-Plugin_Run
-
-Returns qfalse if the plugin crashed.
-===============
-*/
-static qboolean Plugin_Run( plugin_t *p, call_t *c )
-{
-	plugin_t *prev = current;
-	pluginFault_t fault;
-	int ok;
-
-	c->plugin = p;
-	current = p;
-	if ( p->guarded ) {
-		ok = PluginGuard_Call( &p->range, CallThunk, c, &fault );
-	} else {
-		CallThunk( c );
-		ok = 1;
-	}
-	current = prev;
-	drawPhase = DRAW_NONE;
-
-	if ( !ok ) {
-		Plugin_Fault( p, c, &fault );
-		return qfalse;
-	}
-	return qtrue;
-}
-
-// Whether the export table of the plugin is big enough to have the function (plugins built for an older API have a shorter one)
-#define PLUGIN_HAS( p_, fn_ ) \
-	( (p_)->exp->size >= (int)( offsetof( odfcPluginExport_t, fn_ ) + sizeof( (p_)->exp->fn_ ) ) && (p_)->exp->fn_ )
-
-// Runs one call of the given kind on every running plugin that has the function.
-#define PLUGINS_RUN( kind_, fn_, setup_ ) \
+// Runs one call of a plugin. A plugin that traps (bad memory access, bad pointer, out of budget) is stopped.
+#define PLUGIN_RUN( p_, what_, call_ ) \
 	do { \
-		int i_; \
-		for ( i_ = 0; i_ < numPlugins; i_++ ) { \
-			plugin_t *p_ = &plugins[i_]; \
-			call_t call_; \
-			if ( p_->state != PS_RUNNING || !PLUGIN_HAS( p_, fn_ ) ) { \
-				continue; \
-			} \
-			Com_Memset( &call_, 0, sizeof( call_ ) ); \
-			call_.kind = kind_; \
-			setup_ \
-			Plugin_Run( p_, &call_ ); \
+		plugin_t *prev_ = current; \
+		qboolean ok_; \
+		current = (p_); \
+		ok_ = (call_); \
+		current = prev_; \
+		drawPhase = DRAW_NONE; \
+		if ( !ok_ ) { \
+			Plugin_Fault( (p_), (what_) ); \
 		} \
 	} while ( 0 )
+
+// the same, and ok_ says whether the call was made without a trap
+#define PLUGIN_RUN_OK( ok_, p_, what_, call_ ) \
+	do { \
+		plugin_t *prev_ = current; \
+		current = (p_); \
+		(ok_) = (call_); \
+		current = prev_; \
+		drawPhase = DRAW_NONE; \
+		if ( !(ok_) ) { \
+			Plugin_Fault( (p_), (what_) ); \
+		} \
+	} while ( 0 )
+
+#define PLUGIN_HAS( p_, fn_ ) \
+	( (p_)->vm && PluginVM_Has( (p_)->vm, ODFC_EXP_##fn_ ) )
 
 
 // ---------------------------------------------------------------------------
@@ -256,24 +185,73 @@ static int Imp_Milliseconds( void )
 	return Sys_Milliseconds();
 }
 
-static void Imp_HomePath( char *out, int outSize )
-{
-	int len;
+// The cvars a plugin may create. The names the engine and the game use are theirs: a plugin cannot take them over, and
+// cannot mark them read-only or archive them.
+static const char *const reservedPrefixes[] = {
+	"cg_", "cl_", "com_", "df_", "fs_", "g_", "in_", "m_", "net_", "r_", "s_", "sv_", "ui_", "vm_", "j_", "snd_", "con_", "rcon", "cvar_", "bot_", "sensitivity"
+};
 
-	if ( !out || outSize < 1 ) {
-		return;
+static qboolean ValidCvarName( const char *name )
+{
+	int i, len = (int)strlen( name );
+	qboolean underscore = qfalse;
+
+	if ( len < 3 || len >= MAX_CVAR_NAME ) {
+		return qfalse;
 	}
-	Cvar_VariableStringBuffer( "fs_homepath", out, outSize );
-	len = (int)strlen( out );
-	while ( len > 0 && ( out[len - 1] == '/' || out[len - 1] == '\\' ) ) {
-		out[--len] = '\0';
+	for ( i = 0; i < len; i++ ) {
+		char c = name[i];
+
+		if ( c == '_' && i > 0 ) {
+			underscore = qtrue;
+		} else if ( !( ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) ) ) {
+			return qfalse;
+		}
 	}
+	if ( !underscore ) {
+		return qfalse;
+	}
+	for ( i = 0; i < (int)ARRAY_LEN( reservedPrefixes ); i++ ) {
+		if ( !Q_stricmpn( name, reservedPrefixes[i], (int)strlen( reservedPrefixes[i] ) ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+static qboolean Plugin_OwnsCvar( const plugin_t *p, const char *name )
+{
+	int i;
+
+	for ( i = 0; i < p->numCvars; i++ ) {
+		if ( !Q_stricmp( p->cvars[i], name ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }
 
 static void Imp_CvarRegister( const char *name, const char *defaultValue, int flags )
 {
-	if ( !name || !*name || !defaultValue ) {
+	unsigned existing;
+
+	if ( !current || !name || !defaultValue || !ValidCvarName( name ) ) {
+		if ( current && name && *name ) {
+			Com_Printf( S_COLOR_YELLOW "Plugin '%s': cannot create the cvar %s (invalid or reserved name)\n", current->name, name );
+		}
 		return;
+	}
+	if ( !Plugin_OwnsCvar( current, name ) ) {
+		// a value the player set in a config before the plugin started is fine, a cvar of anyone else is not
+		existing = Cvar_Flags( name );
+		if ( existing != CVAR_NONEXISTENT && !( existing & CVAR_USER_CREATED ) ) {
+			Com_Printf( S_COLOR_YELLOW "Plugin '%s': the cvar %s already exists\n", current->name, name );
+			return;
+		}
+		if ( current->numCvars >= MAX_PLUGIN_CVARS ) {
+			return;
+		}
+		Q_strncpyz( current->cvars[current->numCvars++], name, MAX_CVAR_NAME );
 	}
 	if ( flags & ODFC_CVAR_ROM ) {
 		Cvar_Get( name, defaultValue, CVAR_ROM );		// a ROM cvar always has the value given
@@ -282,14 +260,38 @@ static void Imp_CvarRegister( const char *name, const char *defaultValue, int fl
 	Cvar_Get( name, defaultValue, ( flags & ODFC_CVAR_ARCHIVE ) ? CVAR_ARCHIVE_ND : 0 );
 }
 
-// private cvars (keys, passwords) are not readable, like for the game module
+// A plugin reads the cvars it created and settings of the game that show how the player has it set up; nothing else
+// (not passwords, not the cvars of other plugins).
+static const char *const readablePrefixes[] = {
+	"cg_", "r_", "m_", "df_", "pmove_", "cl_yawspeed", "cl_pitchspeed", "cl_run", "cl_freelook", "cl_timenudge", "com_maxfps",
+	"sensitivity", "timescale", "sv_fps", "sv_cheats", "g_speed", "g_gravity", "snaps", "mapname"
+};
+
+static qboolean Plugin_CanRead( const plugin_t *p, const char *name )
+{
+	int i;
+
+	if ( !p || !name || !*name ) {
+		return qfalse;
+	}
+	if ( Plugin_OwnsCvar( p, name ) ) {
+		return qtrue;
+	}
+	for ( i = 0; i < (int)ARRAY_LEN( readablePrefixes ); i++ ) {
+		if ( !Q_stricmpn( name, readablePrefixes[i], (int)strlen( readablePrefixes[i] ) ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 static void Imp_CvarString( const char *name, char *out, int outSize )
 {
 	if ( !out || outSize < 1 ) {
 		return;
 	}
-	if ( !name ) {
-		out[0] = '\0';
+	out[0] = '\0';
+	if ( !Plugin_CanRead( current, name ) ) {
 		return;
 	}
 	Cvar_VariableStringBufferSafe( name, out, outSize, CVAR_PRIVATE );
@@ -602,6 +604,7 @@ static void Imp_DrawModel( float x, float y, float w, float h, int model, const 
 }
 
 
+
 // ---------------------------------------------------------------------------
 // console commands of plugins
 // ---------------------------------------------------------------------------
@@ -643,15 +646,12 @@ static void Plugins_Command_f( void )
 		pluginCommand_t *c = &pluginCommands[i];
 
 		if ( !Q_stricmp( Cmd_Argv( 0 ), c->name ) ) {
-			call_t call;
+			plugin_t *p = c->plugin;
 
-			if ( c->plugin->state != PS_RUNNING || !PLUGIN_HAS( c->plugin, Command ) ) {
+			if ( p->state != PS_RUNNING || !PLUGIN_HAS( p, OnCommand ) ) {
 				return;
 			}
-			Com_Memset( &call, 0, sizeof( call ) );
-			call.kind = PC_COMMAND;
-			call.cmdName = c->name;
-			Plugin_Run( c->plugin, &call );
+			PLUGIN_RUN( p, "OnCommand", ODFC_Call_OnCommand( p->vm, c->name ) );
 			return;
 		}
 	}
@@ -729,6 +729,7 @@ static void SoundOwners_Update( const clSnapshot_t *s )
 }
 
 
+
 // ---------------------------------------------------------------------------
 // loading
 // ---------------------------------------------------------------------------
@@ -767,17 +768,11 @@ static void Plugin_RemoveCommands( plugin_t *p )
 	numPluginCommands = kept;
 }
 
-// A crashed plugin stays mapped: nothing of it runs again, and unloading could run more of its code.
+// Nothing of a plugin that is gone can run again: its memory is freed with it.
 static void Plugin_Unload( plugin_t *p )
 {
-	if ( p->state == PS_FAULTED ) {
-		return;
-	}
-	if ( p->lib ) {
-		Sys_UnloadLibrary( p->lib );
-		p->lib = NULL;
-	}
-	p->exp = NULL;
+	PluginVM_Free( p->vm );
+	p->vm = NULL;
 }
 
 static void Plugin_Fail( plugin_t *p, const char *fmt, ... )
@@ -789,7 +784,7 @@ static void Plugin_Fail( plugin_t *p, const char *fmt, ... )
 	va_end( ap );
 	p->state = PS_FAILED;
 	if ( p->notClient ) {
-		Com_DPrintf( "%s is not a client plugin: %s\n", p->name, p->note );		// a server plugin or a library it needs
+		Com_DPrintf( "%s is not a client plugin: %s\n", p->name, p->note );		// a server plugin
 	} else {
 		Com_Printf( S_COLOR_YELLOW "Plugin '%s' not loaded: %s\n", p->name, p->note );
 	}
@@ -797,109 +792,158 @@ static void Plugin_Fail( plugin_t *p, const char *fmt, ... )
 	Plugin_Unload( p );
 }
 
-static void Plugins_EnsureGuard( void )
+// A plugin that trapped (bad memory access, a pointer outside its memory, out of instructions) is stopped and not called again.
+static void Plugin_Fault( plugin_t *p, const char *what )
 {
-	if ( !guardTried ) {
-		guardTried = qtrue;
-		guardInstalled = PluginGuard_Init() != 0;
-	}
+	Com_sprintf( p->note, sizeof( p->note ), "stopped in %s: %s", what, PluginVM_Error( p->vm ) );
+	p->state = PS_FAULTED;
+	Com_Printf( S_COLOR_RED "Plugin '%s' stopped in %s: %s\n" S_COLOR_RED "It will not run again until it is switched off and on in the menu.\n",
+		p->name, what, PluginVM_Error( p->vm ) );
+	Plugin_RemoveCommands( p );
+	Plugin_Unload( p );
 }
 
-// Loads the library of the plugin and starts it, or says why it did not. The state is PS_RUNNING or one of the others after.
+// the value of a "key=value" line of the manifest of a plugin
+static qboolean Manifest_Value( const char *manifest, const char *key, char *out, int outSize )
+{
+	int keyLen = (int)strlen( key );
+	const char *s = manifest;
+
+	while ( *s ) {
+		const char *end = s;
+
+		while ( *end && *end != '\n' ) {
+			end++;
+		}
+		if ( !Q_strncmp( s, key, keyLen ) && s[keyLen] == '=' ) {
+			int len = (int)( end - ( s + keyLen + 1 ) );
+
+			while ( len > 0 && s[keyLen + len] == '\r' ) {
+				len--;
+			}
+			if ( len >= outSize ) {
+				len = outSize - 1;
+			}
+			Com_Memcpy( out, s + keyLen + 1, len );
+			out[len] = '\0';
+			return qtrue;
+		}
+		s = *end ? end + 1 : end;
+	}
+	out[0] = '\0';
+	return qfalse;
+}
+
+static void Plugin_Config( pluginVMConfig_t *cfg, const plugin_t *p )
+{
+	Com_Memset( cfg, 0, sizeof( *cfg ) );
+	cfg->name = p->name;
+	cfg->module = "odfc";
+	cfg->dispatch = Plugin_Dispatch;
+	cfg->exportNames = odfc_exportNames;
+	cfg->numExports = ODFC_NUM_EXPORTS;
+	cfg->grantedCaps = ODFC_CAPS_ALL;
+	cfg->capNames = odfc_capNames;
+	cfg->numCaps = ODFC_NUM_CAPS;
+	cfg->maxDataBytes = 16 * 1024 * 1024;
+}
+
+// Reads the file of a plugin. Returns NULL (and says why in err) if it cannot be read.
+static void *Plugin_ReadFile( const char *path, int *size, char *err, int errSize )
+{
+	FILE *f = Sys_FOpen( path, "rb" );
+	long len;
+	void *data;
+
+	if ( !f ) {
+		Com_sprintf( err, errSize, "%s not found", path );
+		return NULL;
+	}
+	fseek( f, 0, SEEK_END );
+	len = ftell( f );
+	fseek( f, 0, SEEK_SET );
+	if ( len < 8 || len > MAX_MODULE_FILE ) {
+		fclose( f );
+		Com_sprintf( err, errSize, "%s is not a plugin (size %ld)", path, len );
+		return NULL;
+	}
+	data = malloc( len );
+	if ( !data || fread( data, 1, len, f ) != (size_t)len ) {
+		free( data );
+		fclose( f );
+		Com_sprintf( err, errSize, "cannot read %s", path );
+		return NULL;
+	}
+	fclose( f );
+	*size = (int)len;
+	return data;
+}
+
+// Loads the module of the plugin and starts it, or says why it did not. The state is PS_RUNNING or one of the others after.
 static void Plugin_Start( plugin_t *p )
 {
-	odfcPluginEntry_t entry;
-	call_t call;
-	FILE *f;
+	pluginVMConfig_t cfg;
+	char err[256], value[64];
+	void *data;
+	int size = 0, rc = 0;
+	qboolean ok;
 
-	Plugins_EnsureGuard();
 	p->state = PS_FAILED;
 	p->notClient = qfalse;
 	p->note[0] = '\0';
+	p->version[0] = '\0';
 
 	Q_strncpyz( p->path, FS_BuildOSPath( Cvar_VariableString( "fs_homepath" ), "plugins", va( "%s" PLUGIN_EXT, p->name ) ), sizeof( p->path ) );
-	f = Sys_FOpen( p->path, "rb" );
-	if ( !f ) {
-		Plugin_Fail( p, "%s not found", p->path );
-		return;
-	}
-	fclose( f );
-
-	p->lib = Sys_LoadLibrary( p->path );
-	if ( !p->lib ) {
-		Plugin_Fail( p, "cannot load %s (missing dependency or wrong architecture?)", p->path );
-		return;
-	}
-	entry = (odfcPluginEntry_t)Sys_LoadFunction( p->lib, "ODF_ClientPluginEntry" );
-	if ( !entry ) {
-		p->notClient = qtrue;
-		Plugin_Fail( p, "%s has no ODF_ClientPluginEntry", p->path );
+	data = Plugin_ReadFile( p->path, &size, err, sizeof( err ) );
+	if ( !data ) {
+		Plugin_Fail( p, "%s", err );
 		return;
 	}
 
-	p->guarded = guardInstalled && PluginGuard_ModuleRange( p->lib, (const void *)entry, &p->range );
-	if ( !p->guarded ) {
-		Com_Printf( S_COLOR_YELLOW "Plugin '%s': crash protection is not available on this platform, a crash in the plugin will crash the game.\n", p->name );
-	}
-
-	Com_Memset( &call, 0, sizeof( call ) );
-	call.kind = PC_ENTRY;
-	call.entry = entry;
-	if ( !Plugin_Run( p, &call ) ) {
-		return;		// state and message set by Plugin_Fault
-	}
-	p->exp = call.result;
-	if ( !p->exp ) {
-		Plugin_Fail( p, "the plugin refused to load" );
-		return;
-	}
-	if ( p->exp->apiVersion > ODFC_API_VERSION ) {
-		Plugin_Fail( p, "built for client plugin API %i, this client has %i", p->exp->apiVersion, ODFC_API_VERSION );
-		return;
-	}
-	// the functions of version 1 have to be there; newer ones are optional and checked where they are used
-	if ( p->exp->size < (int)( offsetof( odfcPluginExport_t, Draw2D ) + sizeof( p->exp->Draw2D ) ) ) {
-		Plugin_Fail( p, "export table is too small (%i bytes)", p->exp->size );
+	Plugin_Config( &cfg, p );
+	p->vm = PluginVM_Load( data, size, &cfg, p, err, sizeof( err ) );
+	free( data );
+	if ( !p->vm ) {
+		// a server plugin is in the same folder: it is not an error, it is just not ours
+		p->notClient = !Q_strncmp( err, "is for the API odfs", 19 );
+		Plugin_Fail( p, "%s", err );
 		return;
 	}
 
-	if ( PLUGIN_HAS( p, Init ) ) {
-		Com_Memset( &call, 0, sizeof( call ) );
-		call.kind = PC_INIT;
-		if ( !Plugin_Run( p, &call ) ) {
-			return;
+	Manifest_Value( PluginVM_Manifest( p->vm ), "version", p->version, sizeof( p->version ) );
+	if ( Manifest_Value( PluginVM_Manifest( p->vm ), "api", value, sizeof( value ) ) && atoi( value ) > ODFC_API_VERSION ) {
+		Plugin_Fail( p, "built for client plugin API %i, this client has %i", atoi( value ), ODFC_API_VERSION );
+		return;
+	}
+
+	if ( PLUGIN_HAS( p, OnInit ) ) {
+		PLUGIN_RUN_OK( ok, p, "OnInit", ODFC_Call_OnInit( p->vm, &rc ) );
+		if ( !ok ) {
+			return;		// state and message set by Plugin_Fault
 		}
-		if ( call.rc != 0 ) {
-			Plugin_Fail( p, "Init returned %i", call.rc );
+		if ( rc != 0 ) {
+			Plugin_Fail( p, "init returned %i", rc );
 			return;
 		}
 	}
 
 	p->state = PS_RUNNING;
-	Com_Printf( "Client plugin '%s' %s loaded%s\n", p->name, p->exp->version ? p->exp->version : "", p->guarded ? "" : " (unguarded)" );
+	Com_Printf( "Client plugin '%s' %s loaded\n", p->name, p->version );
 }
 
-// Stops a running plugin and unloads it. A plugin that crashes while it is told to stop stays crashed.
+// Stops a running plugin and unloads it.
 static void Plugin_Stop( plugin_t *p )
 {
-	call_t call;
-
 	if ( p->state == PS_RUNNING ) {
-		if ( mapLoaded && PLUGIN_HAS( p, CGameShutdown ) ) {
-			Com_Memset( &call, 0, sizeof( call ) );
-			call.kind = PC_CGAMESHUTDOWN;
-			if ( !Plugin_Run( p, &call ) ) {
-				return;
-			}
+		if ( mapLoaded && PLUGIN_HAS( p, OnCgameShutdown ) ) {
+			PLUGIN_RUN( p, "OnCgameShutdown", ODFC_Call_OnCgameShutdown( p->vm ) );
 		}
-		if ( PLUGIN_HAS( p, Shutdown ) ) {
-			Com_Memset( &call, 0, sizeof( call ) );
-			call.kind = PC_SHUTDOWN;
-			if ( !Plugin_Run( p, &call ) ) {
-				return;
-			}
+		if ( p->state == PS_RUNNING && PLUGIN_HAS( p, OnShutdown ) ) {
+			PLUGIN_RUN( p, "OnShutdown", ODFC_Call_OnShutdown( p->vm ) );
 		}
-		p->state = PS_STOPPED;
+		if ( p->state == PS_RUNNING ) {
+			p->state = PS_STOPPED;
+		}
 	}
 	Plugin_RemoveCommands( p );
 	Plugin_Unload( p );
@@ -1023,8 +1067,8 @@ static int Plugins_NameCompare( const void *a, const void *b )
 ===============
 Plugins_Scan
 
-Starts every library of the plugins folder that is not known yet, except the ones that are switched off. Libraries
-without a client plugin entry (server plugins, what a plugin needs) are remembered as hidden, so they are not tried again.
+Starts every module of the plugins folder that is not known yet, except the ones that are switched off. Modules that are
+not client plugins (server plugins) are remembered as hidden, so they are not tried again.
 ===============
 */
 static void Plugins_Scan( void )
@@ -1058,7 +1102,7 @@ static void Plugins_Scan( void )
 			continue;
 		}
 		if ( numPlugins >= MAX_PLUGINS ) {
-			Com_Printf( S_COLOR_YELLOW "Plugin '%s' not loaded: at most %i libraries are looked at\n", name, MAX_PLUGINS );
+			Com_Printf( S_COLOR_YELLOW "Plugin '%s' not loaded: at most %i plugins are looked at\n", name, MAX_PLUGINS );
 			break;
 		}
 
@@ -1078,8 +1122,28 @@ static void Plugins_Scan( void )
 
 static void Plugins_List_f( void )
 {
-	static const char *const stateNames[] = { "running", "stopped", "failed", "crashed", "disabled" };
+	static const char *const stateNames[] = { "running", "stopped", "failed", "stopped*", "disabled" };
 	int i, shown = 0;
+
+	// clplugins stats: what the calls of every plugin cost (wall time, with the engine's work for its imports); clplugins reset
+	if ( !Q_stricmp( Cmd_Argv( 1 ), "stats" ) || !Q_stricmp( Cmd_Argv( 1 ), "reset" ) ) {
+		qboolean reset = Q_stricmp( Cmd_Argv( 1 ), "reset" ) == 0;
+
+		for ( i = 0; i < numPlugins; i++ ) {
+			plugin_t *p = &plugins[i];
+
+			if ( p->hidden || !p->vm ) {
+				continue;
+			}
+			if ( reset ) {
+				PluginVM_ResetStats( p->vm );
+				continue;
+			}
+			Com_Printf( "%s\n", p->name );
+			PluginVM_PrintStats( p->vm, odfc_exportNames, ODFC_NUM_EXPORTS );
+		}
+		return;
+	}
 
 	Com_Printf( "%-16s %-8s %s\n", "name", "state", "details" );
 	for ( i = 0; i < numPlugins; i++ ) {
@@ -1088,9 +1152,8 @@ static void Plugins_List_f( void )
 		if ( p->hidden ) {
 			continue;
 		}
-		Com_Printf( "%-16s %-8s %s%s%s\n", p->name, stateNames[p->state],
-			p->state == PS_RUNNING && p->exp->version ? p->exp->version : p->note,
-			p->state == PS_RUNNING && !p->guarded ? " (no crash protection)" : "",
+		Com_Printf( "%-16s %-8s %s%s\n", p->name, stateNames[p->state],
+			p->state == PS_RUNNING ? p->version : p->note,
 			p->disabled && p->state != PS_DISABLED ? " (disabled, off after a restart)" : "" );
 		shown++;
 	}
@@ -1105,39 +1168,10 @@ void CL_Plugins_Init( void )
 
 	Cmd_AddCommand( "clplugins", Plugins_List_f );
 
-	Com_Memset( &imports, 0, sizeof( imports ) );
-	imports.size = sizeof( imports );
-	imports.apiVersion = ODFC_API_VERSION;
-	imports.Print = Imp_Print;
-	imports.Milliseconds = Imp_Milliseconds;
-	imports.HomePath = Imp_HomePath;
-	imports.CvarRegister = Imp_CvarRegister;
-	imports.CvarString = Imp_CvarString;
-	imports.CvarInteger = Imp_CvarInteger;
-	imports.CvarValue = Imp_CvarValue;
-	imports.CheatsEnabled = Imp_CheatsEnabled;
-	imports.GetSnapshot = Imp_GetSnapshot;
-	imports.Trace = Imp_Trace;
-	imports.GetPlayerState = Imp_GetPlayerState;
-	imports.GetMoveState = Imp_GetMoveState;
-	imports.PointContents = Imp_PointContents;
-	imports.RegisterShader = Imp_RegisterShader;
-	imports.AddPoly = Imp_AddPoly;
-	imports.AddBeam = Imp_AddBeam;
-	imports.SetColor = Imp_SetColor;
-	imports.DrawStretchPic = Imp_DrawStretchPic;
-	imports.GetWeaponState = Imp_GetWeaponState;
-	imports.RegisterModel = Imp_RegisterModel;
-	imports.RegisterShaderNoMip = Imp_RegisterShaderNoMip;
-	imports.DrawModel = Imp_DrawModel;
-	imports.CommandRegister = Imp_CommandRegister;
-	imports.CommandArgc = Imp_CommandArgc;
-	imports.CommandArgv = Imp_CommandArgv;
-
 	Disabled_Read();
 	Plugins_Scan();
 
-	// names of libraries that are gone
+	// names of modules that are gone
 	for ( i = 0; i < numPlugins; i++ ) {
 		if ( plugins[i].disabled ) {
 			disabledInFolder++;
@@ -1153,37 +1187,16 @@ void CL_Plugins_Shutdown( void )
 	int i;
 
 	Cmd_RemoveCommand( "clplugins" );
+	for ( i = 0; i < numPlugins; i++ ) {
+		Plugin_Stop( &plugins[i] );
+	}
 	for ( i = 0; i < numPluginCommands; i++ ) {
 		Cmd_RemoveCommand( pluginCommands[i].name );
 	}
 	numPluginCommands = 0;
 	mapLoaded = qfalse;
-
-	for ( i = 0; i < numPlugins; i++ ) {
-		plugin_t *p = &plugins[i];
-
-		if ( p->state == PS_RUNNING ) {
-			if ( PLUGIN_HAS( p, Shutdown ) ) {
-				call_t call;
-
-				Com_Memset( &call, 0, sizeof( call ) );
-				call.kind = PC_SHUTDOWN;
-				if ( !Plugin_Run( p, &call ) ) {
-					continue;
-				}
-			}
-			p->state = PS_STOPPED;
-		}
-		Plugin_Unload( p );
-	}
 	numPlugins = 0;
 	numDisabledNames = 0;
-
-	if ( guardInstalled ) {
-		PluginGuard_Shutdown();
-		guardInstalled = qfalse;
-	}
-	guardTried = qfalse;
 }
 
 
@@ -1224,9 +1237,8 @@ int CL_Plugins_Count( void )
 CL_Plugins_Info
 
 One thing about plugin number index of CL_Plugins_Count: field 0 is the name, 1 the version (only of a running plugin),
-2 why it is not running, 3 "1" when it is switched off (also while it still runs until the game is restarted: a plugin
-that crashed cannot be unloaded). Returns the state: 0 running, 1 stopped, 2 failed, 3 crashed, 4 disabled; -1 when
-there is no such plugin.
+2 why it is not running, 3 "1" when it is switched off. Returns the state: 0 running, 1 stopped, 2 failed, 3 stopped by
+the engine (it trapped or ran out of budget), 4 disabled; -1 when there is no such plugin.
 ===============
 */
 int CL_Plugins_Info( int index, int field, char *out, int outSize )
@@ -1243,7 +1255,7 @@ int CL_Plugins_Info( int index, int field, char *out, int outSize )
 	}
 	switch ( field ) {
 	case 0: text = p->name; break;
-	case 1: text = p->state == PS_RUNNING && p->exp && p->exp->version ? p->exp->version : ""; break;
+	case 1: text = p->state == PS_RUNNING ? p->version : ""; break;
 	case 2: text = p->state == PS_FAILED || p->state == PS_FAULTED ? p->note : ""; break;
 	case 3: text = p->disabled ? "1" : "0"; break;
 	}
@@ -1266,36 +1278,27 @@ int CL_Plugins_SetEnabled( const char *name, int enable )
 	if ( !p || p->hidden ) {
 		return 0;
 	}
-	if ( ( enable != 0 ) == !p->disabled && p->state != PS_FAILED ) {
+	if ( ( enable != 0 ) == !p->disabled && p->state != PS_FAILED && p->state != PS_FAULTED ) {
 		return 1;
 	}
 
 	p->disabled = enable ? qfalse : qtrue;
-	if ( p->state != PS_FAULTED ) {
-		if ( p->disabled ) {
-			Plugin_Stop( p );
-			if ( p->state != PS_FAULTED ) {
-				p->state = PS_DISABLED;
-				p->note[0] = '\0';
-			}
-		} else {
-			Plugin_Start( p );
-			// it missed the map that is already loaded
-			if ( p->state == PS_RUNNING && mapLoaded && PLUGIN_HAS( p, MapLoad ) ) {
-				call_t call;
-
-				Com_Memset( &call, 0, sizeof( call ) );
-				call.kind = PC_MAPLOAD;
-				call.mapName = loadedMap;
-				Plugin_Run( p, &call );
-			}
+	if ( p->disabled ) {
+		Plugin_Stop( p );
+		p->state = PS_DISABLED;
+		p->note[0] = '\0';
+	} else {
+		Plugin_Start( p );
+		// it missed the map that is already loaded
+		if ( p->state == PS_RUNNING && mapLoaded && PLUGIN_HAS( p, OnMapLoad ) ) {
+			PLUGIN_RUN( p, "OnMapLoad", ODFC_Call_OnMapLoad( p->vm, loadedMap ) );
 		}
 	}
 	Disabled_Write();
 	return 1;
 }
 
-// picks up libraries that were put into the folder while the game runs
+// picks up modules that were put into the folder while the game runs
 void CL_Plugins_Rescan( void )
 {
 	Plugins_Scan();
@@ -1321,31 +1324,54 @@ void CL_Plugins_SetPlayerState( const playerState_t *ps, int viewFlags )
 void CL_Plugins_MapLoad( const char *mapName )
 {
 	char name[MAX_QPATH];
+	int i;
 
 	Q_strncpyz( name, mapName ? mapName : "", sizeof( name ) );
 	Q_strncpyz( loadedMap, name, sizeof( loadedMap ) );
 	mapLoaded = qtrue;
 	published = qfalse;
 	SoundOwners_Reset();
-	PLUGINS_RUN( PC_MAPLOAD, MapLoad, call_.mapName = name; );
+	for ( i = 0; i < numPlugins; i++ ) {
+		plugin_t *p = &plugins[i];
+
+		if ( p->state == PS_RUNNING && PLUGIN_HAS( p, OnMapLoad ) ) {
+			PLUGIN_RUN( p, "OnMapLoad", ODFC_Call_OnMapLoad( p->vm, name ) );
+		}
+	}
 }
 
 // the demo that is playing jumped (cl_demoseek.c)
 void CL_Plugins_DemoSeek( int fromTime, int toTime )
 {
+	int i;
+
 	if ( !numPlugins || !mapLoaded ) {
 		return;
 	}
 	published = qfalse;
-	PLUGINS_RUN( PC_DEMOSEEK, DemoSeek, call_.seek[0] = fromTime; call_.seek[1] = toTime; );
+	for ( i = 0; i < numPlugins; i++ ) {
+		plugin_t *p = &plugins[i];
+
+		if ( p->state == PS_RUNNING && PLUGIN_HAS( p, OnDemoSeek ) ) {
+			PLUGIN_RUN( p, "OnDemoSeek", ODFC_Call_OnDemoSeek( p->vm, fromTime, toTime ) );
+		}
+	}
 }
 
 void CL_Plugins_CGameShutdown( void )
 {
+	int i;
+
 	if ( !mapLoaded ) {
 		return;
 	}
-	PLUGINS_RUN( PC_CGAMESHUTDOWN, CGameShutdown, );
+	for ( i = 0; i < numPlugins; i++ ) {
+		plugin_t *p = &plugins[i];
+
+		if ( p->state == PS_RUNNING && PLUGIN_HAS( p, OnCgameShutdown ) ) {
+			PLUGIN_RUN( p, "OnCgameShutdown", ODFC_Call_OnCgameShutdown( p->vm ) );
+		}
+	}
 	mapLoaded = qfalse;
 }
 
@@ -1358,6 +1384,7 @@ void CL_Plugins_BeforeScene( const refdef_t *fd )
 	if ( !numPlugins || !mapLoaded || !fd || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
 		return;
 	}
+	Com_Memset( &view, 0, sizeof( view ) );
 	view.time = cl.serverTime;
 	view.x = fd->x;
 	view.y = fd->y;
@@ -1372,15 +1399,31 @@ void CL_Plugins_BeforeScene( const refdef_t *fd )
 		VectorCopy( fd->viewaxis[i], view.axis[i] );
 	}
 
-	// Plugin_Run puts drawPhase back to DRAW_NONE after each call
-	PLUGINS_RUN( PC_DRAW3D, Draw3D, call_.view = &view; drawPhase = DRAW_3D; );
+	// PLUGIN_RUN puts drawPhase back to DRAW_NONE after each call
+	for ( i = 0; i < numPlugins; i++ ) {
+		plugin_t *p = &plugins[i];
+
+		if ( p->state == PS_RUNNING && PLUGIN_HAS( p, OnDraw3D ) ) {
+			drawPhase = DRAW_3D;
+			PLUGIN_RUN( p, "OnDraw3D", ODFC_Call_OnDraw3D( p->vm, &view ) );
+		}
+	}
 }
 
 static void Plugins_Draw2D( int phase )
 {
 	qboolean drew = qfalse;
+	int i;
 
-	PLUGINS_RUN( PC_DRAW2D, Draw2D, call_.phase = phase; drawPhase = DRAW_2D; drew = qtrue; );
+	for ( i = 0; i < numPlugins; i++ ) {
+		plugin_t *p = &plugins[i];
+
+		if ( p->state == PS_RUNNING && PLUGIN_HAS( p, OnDraw2D ) ) {
+			drawPhase = DRAW_2D;
+			drew = qtrue;
+			PLUGIN_RUN( p, "OnDraw2D", ODFC_Call_OnDraw2D( p->vm, phase ) );
+		}
+	}
 	if ( drew ) {
 		re.SetColor( NULL );		// the game does not expect the colour a plugin left behind
 	}
@@ -1404,7 +1447,7 @@ void CL_Plugins_AfterFrame( void )
 	Plugins_Draw2D( ODFC_DRAW2D_FRAME );
 }
 
-// Whether a plugin wants the sound dropped (see FilterSound in the API). Called by the cgame system calls that start sounds.
+// Whether a plugin wants the sound dropped (see filter_sound in the API). Called by the cgame system calls that start sounds.
 qboolean CL_Plugins_FilterSound( int entityNum, qboolean isLoop )
 {
 	const clSnapshot_t *snap;
@@ -1422,18 +1465,14 @@ qboolean CL_Plugins_FilterSound( int entityNum, qboolean isLoop )
 
 	for ( i = 0; i < numPlugins; i++ ) {
 		plugin_t *p = &plugins[i];
-		call_t call;
+		qboolean ok;
+		int drop = 0;
 
-		if ( p->state != PS_RUNNING || !PLUGIN_HAS( p, FilterSound ) ) {
+		if ( p->state != PS_RUNNING || !PLUGIN_HAS( p, OnFilterSound ) ) {
 			continue;
 		}
-		Com_Memset( &call, 0, sizeof( call ) );
-		call.kind = PC_FILTERSOUND;
-		call.sound[0] = entityNum;
-		call.sound[1] = isLoop ? 1 : 0;
-		call.sound[2] = owner;
-		call.sound[3] = snap->ps.clientNum;
-		if ( Plugin_Run( p, &call ) && call.soundResult ) {
+		PLUGIN_RUN_OK( ok, p, "OnFilterSound", ODFC_Call_OnFilterSound( p->vm, entityNum, isLoop ? 1 : 0, owner, snap->ps.clientNum, &drop ) );
+		if ( ok && drop ) {
 			return qtrue;
 		}
 	}
