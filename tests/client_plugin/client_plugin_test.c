@@ -1,18 +1,12 @@
 /*
-Tests the real client plugin host (cl_plugin.c, sv_plugin_guard.c) against a mock plugin, with the engine
-functions it calls stubbed out (stubs.c). Not part of the engine build, see run.sh.
+Tests the real client plugin host (cl_plugin.c, odf_wasm.c and the WAMR runtime) against mock plugins built for
+WebAssembly, with the engine functions it calls stubbed out (stubs.c). Not part of the engine build, see run.sh.
 */
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 
 #include "client.h"
 #include "stubs.h"
@@ -24,25 +18,38 @@ static int failures;
 
 #define CHECK( cond, ... ) do { if ( !( cond ) ) { failures++; printf( "  FAIL line %d: ", __LINE__ ); printf( __VA_ARGS__ ); printf( "\n" ); } } while ( 0 )
 
-static mockState_t *mock, *oldMock;
+// The state of the mock plugins lives here, outside of their sandboxes (see mock_state.h).
+static mockState_t mirrorMock, mirrorSecond;
+static mockState_t *mock = &mirrorMock, *oldMock = &mirrorSecond;
 static const char *homeDir;
 
-static void *OpenModule( const char *path )
+static mockState_t *MirrorOf( const char *plugin )
 {
-#ifdef _WIN32
-	return (void *)LoadLibraryA( path );
-#else
-	return dlopen( path, RTLD_NOW );
-#endif
+	if ( !strcmp( plugin, "mock" ) ) {
+		return &mirrorMock;
+	}
+	if ( !strcmp( plugin, "second" ) ) {
+		return &mirrorSecond;
+	}
+	return NULL;
 }
 
-static void *LoadSym( void *lib, const char *name )
+void Test_MirrorPull( const char *plugin, void *dst, int size )
 {
-#ifdef _WIN32
-	return (void *)GetProcAddress( (HMODULE)lib, name );
-#else
-	return dlsym( lib, name );
-#endif
+	mockState_t *m = MirrorOf( plugin );
+
+	if ( m && size == (int)sizeof( *m ) ) {
+		memcpy( dst, m, size );
+	}
+}
+
+void Test_MirrorPush( const char *plugin, const void *src, int size )
+{
+	mockState_t *m = MirrorOf( plugin );
+
+	if ( m && size == (int)sizeof( *m ) ) {
+		memcpy( m, src, size );
+	}
 }
 
 static int FindPrint( const char *text )
@@ -206,29 +213,35 @@ static void TestLoading( void )
 	printf( "loading\n" );
 	CHECK( FindPrint( "Client plugin 'mock' mock 1.0 loaded" ) >= 0, "mock was not loaded" );
 	CHECK( FindPrint( "built for client plugin API" ) >= 0, "a plugin of a newer API must be refused" );
-	CHECK( FindPrint( "export table is too small" ) >= 0, "a small export table must be refused" );
-	CHECK( FindPrint( "refused to load" ) >= 0, "a plugin that returns NULL is not loaded" );
-	CHECK( FindPrint( "ODF_ClientPluginEntry" ) < 0, "a library that is not a client plugin must not be reported" );
+	CHECK( FindPrint( "imports wasi_snapshot_preview1.fd_write" ) >= 0, "a plugin that wants the system must be refused" );
+	CHECK( FindPrint( "init returned 1" ) >= 0, "a plugin whose init fails is not loaded" );
+	CHECK( FindPrint( "no odf_io" ) >= 0 || FindPrint( "has no odf_io" ) >= 0, "a plugin without an io buffer must be refused" );
+	CHECK( FindPrint( "odfs" ) < 0, "a server plugin must not be reported" );
 
-	// what the menu is shown: five plugins, in the order of their names; neither the library that is not a client
+	// what the menu is shown: six plugins, in the order of their names; neither the module that is a server
 	// plugin nor the one with a name that cannot be used is in the list
-	CHECK( CL_Plugins_Count() == 5, "the list has %d plugins", CL_Plugins_Count() );
-	CHECK( StateOf( "mock" ) == 0 && StateOf( "badver" ) == 2 && StateOf( "badsize" ) == 2 && StateOf( "refuse" ) == 2, "states" );
-	CHECK( StateOf( "oldexp" ) == 4, "a plugin in the disabled file is not started (state %d)", StateOf( "oldexp" ) );
-	CHECK( StateOf( "noentry" ) == -1 && StateOf( "bad name" ) == -1, "libraries that are no plugins are listed" );
+	CHECK( CL_Plugins_Count() == 6, "the list has %d plugins", CL_Plugins_Count() );
+	CHECK( StateOf( "mock" ) == 0 && StateOf( "badver" ) == 2 && StateOf( "badimport" ) == 2 && StateOf( "refuse" ) == 2 && StateOf( "noio" ) == 2, "states" );
+	CHECK( StateOf( "second" ) == 4, "a plugin in the disabled file is not started (state %d)", StateOf( "second" ) );
+	CHECK( StateOf( "noentry" ) == -1 && StateOf( "bad name" ) == -1, "modules that are no client plugins are listed" );
 	{
 		char text[256];
 
 		CHECK( ListedState( "mock", 1, text, sizeof( text ) ) == 0 && !strcmp( text, "mock 1.0" ), "version '%s'", text );
 		ListedState( "badver", 2, text, sizeof( text ) );
 		CHECK( strstr( text, "built for client plugin API" ) != NULL, "reason '%s'", text );
-		ListedState( "oldexp", 3, text, sizeof( text ) );
+		ListedState( "second", 3, text, sizeof( text ) );
 		CHECK( !strcmp( text, "1" ), "disabled flag '%s'", text );
 		ListedState( "mock", 3, text, sizeof( text ) );
 		CHECK( !strcmp( text, "0" ), "disabled flag of a running plugin '%s'", text );
 		CHECK( CL_Plugins_Info( 99, 0, text, sizeof( text ) ) == -1 && text[0] == '\0', "an index out of the list" );
 	}
 	CHECK( oldMock && oldMock->initCalls == 0, "a disabled plugin was started" );
+	CHECK( mock->notOwnedSeen[0] == '\0', "a cvar nobody listed was readable: '%s'", mock->notOwnedSeen );
+	CHECK( !strcmp( mock->readableSeen, "1" ), "a setting of the game was not readable: '%s'", mock->readableSeen );
+	CHECK( !mock->cvarReserved, "a plugin created a cvar with a name of the game" );
+	CHECK( FindPrint( "cannot create the cvar cg_mock_evil" ) >= 0, "the refusal was not reported" );
+	CHECK( FindPrint( "the cvar mock_secret already exists" ) >= 0, "a private cvar was taken over" );
 
 	CHECK( mock->initCalls == 1, "Init calls %d", mock->initCalls );
 	CHECK( mock->cvarDefault == 5, "a registered cvar has its default, got %d", mock->cvarDefault );
@@ -307,7 +320,6 @@ static void TestTrace( void )
 	CHECK( stTraceBoxCalls == 1, "a box trace must pass its box on" );
 	CHECK( mock->traceGood.fraction == 0.5f && mock->traceGood.endpos[0] == 50.0f && mock->traceGood.normal[2] == 1.0f, "trace result" );
 	CHECK( mock->traceNaN.fraction == 1.0f, "NaN trace fraction %f", mock->traceNaN.fraction );
-	CHECK( mock->traceNull.fraction == 1.0f, "NULL trace fraction %f", mock->traceNull.fraction );
 }
 
 static void TestSnapshots( void )
@@ -619,39 +631,6 @@ static void TestV4( void )
 	cls.state = CA_ACTIVE;
 }
 
-// a plugin built for version 3 has a shorter export table: it keeps working and gets none of the new calls
-static void TestOldExports( void )
-{
-	refdef_t fd = TestRefdef();
-	int i;
-
-	printf( "a plugin with the export table of version 3\n" );
-	numAddedCommands = 0;
-	stCmdArgc = 0;
-	WriteDisabled( "mock\nbadver\nbadsize\nrefuse\n" );
-	SetUpGame();
-	CL_Plugins_Init();
-	CL_Plugins_MapLoad( "maps/test.bsp" );
-	CHECK( oldMock && oldMock->initCalls == 1, "the plugin with the old export table was not started" );
-	if ( oldMock ) {
-		CHECK( oldMock->cmdRegistered == 1, "its command was not registered" );
-		Frame3D();
-		CL_Plugins_AfterScene( &fd );
-		CHECK( oldMock->draw3d == 1 && oldMock->draw2d == 1, "the old plugin is not drawn (%d %d)", oldMock->draw3d, oldMock->draw2d );
-		for ( i = 0; i < numAddedCommands; i++ ) {
-			if ( addedCommandFn[i] ) {
-				snprintf( stCmdArgs[0], sizeof( stCmdArgs[0] ), "%.31s", addedCommands[i] );
-				stCmdArgc = 1;
-				addedCommandFn[i]();
-			}
-		}
-		CHECK( !CL_Plugins_FilterSound( 41, qfalse ), "a sound was dropped by a plugin that cannot filter" );
-		CHECK( oldMock->filterCalls == 0 && oldMock->commandCalls == 0, "new calls reached a plugin that cannot have them (%d %d)", oldMock->filterCalls, oldMock->commandCalls );
-	}
-	CL_Plugins_CGameShutdown();
-	CL_Plugins_Shutdown();
-}
-
 static int CommandRegistered( const char *name )
 {
 	int i;
@@ -674,7 +653,7 @@ static void TestToggle( void )
 	printf( "switching plugins on and off\n" );
 
 	// mock is off from the start
-	WriteDisabled( "mock\noldexp\nbadver\nbadsize\nrefuse\n" );
+	WriteDisabled( "mock\nsecond\nbadver\nbadimport\nrefuse\nnoio\n" );
 	memset( mock, 0, sizeof( *mock ) );
 	numAddedCommands = 0;
 	SetUpGame();
@@ -692,7 +671,7 @@ static void TestToggle( void )
 	Frame3D();
 	CHECK( mock->draw3d == 1, "a plugin that was switched on is not drawn" );
 	ReadDisabled( file, sizeof( file ) );
-	CHECK( strstr( file, "mock" ) == NULL && strstr( file, "oldexp" ) != NULL, "file after switching on: '%s'", file );
+	CHECK( strstr( file, "mock" ) == NULL && strstr( file, "second" ) != NULL, "file after switching on: '%s'", file );
 
 	// off: it is told, its commands go, it is not called again
 	inits = mock->initCalls; shutdowns = mock->shutdownCalls; mapLoads = mock->mapLoads; cgameShutdowns = mock->cgameShutdowns;
@@ -720,27 +699,15 @@ static void TestToggle( void )
 	CHECK( StateOf( "refuse" ) == 4, "refuse is off" );
 	CHECK( CL_Plugins_SetEnabled( "refuse", 1 ) == 1 && StateOf( "refuse" ) == 2, "a plugin that refuses is failed again (%d)", StateOf( "refuse" ) );
 	CHECK( CL_Plugins_SetEnabled( "refuse", 0 ) == 1 && StateOf( "refuse" ) == 4, "a failed plugin can be switched off" );
-	CHECK( CL_Plugins_SetEnabled( "badsize", 1 ) == 1 && StateOf( "badsize" ) == 2, "badsize after switching on" );
+	CHECK( CL_Plugins_SetEnabled( "badimport", 1 ) == 1 && StateOf( "badimport" ) == 2, "badimport after switching on" );
 	ResetCounters();
-	CHECK( CL_Plugins_SetEnabled( "badsize", 1 ) == 1 && StateOf( "badsize" ) == 2, "badsize after switching on again" );
-	CHECK( FindPrint( "export table is too small" ) >= 0, "a plugin that failed is not tried again when it is switched on" );
+	CHECK( CL_Plugins_SetEnabled( "badimport", 1 ) == 1 && StateOf( "badimport" ) == 2, "badimport after switching on again" );
+	CHECK( FindPrint( "imports wasi_snapshot_preview1.fd_write" ) >= 0, "a plugin that failed is tried again when it is switched on" );
 
 	// a library that appears in the folder is picked up, and started
-	snprintf( src, sizeof( src ), "%s/plugins/mock%s", homeDir,
-#ifdef _WIN32
-		".dll"
-#else
-		".so"
-#endif
-	);
-	snprintf( late, sizeof( late ), "%s/plugins/late%s", homeDir,
-#ifdef _WIN32
-		".dll"
-#else
-		".so"
-#endif
-	);
-	CHECK( CL_Plugins_Count() == 5, "count %d before the new library", CL_Plugins_Count() );
+	snprintf( src, sizeof( src ), "%s/plugins/mock.wasm", homeDir );
+	snprintf( late, sizeof( late ), "%s/plugins/late.wasm", homeDir );
+	CHECK( CL_Plugins_Count() == 6, "count %d before the new module", CL_Plugins_Count() );
 	in = fopen( src, "rb" );
 	out = fopen( late, "wb" );
 	if ( in && out ) {
@@ -755,24 +722,24 @@ static void TestToggle( void )
 	if ( out ) fclose( out );
 	ResetCounters();
 	CL_Plugins_Rescan();
-	CHECK( CL_Plugins_Count() == 6 && StateOf( "late" ) == 0, "the new library is not listed and running (%d, state %d)", CL_Plugins_Count(), StateOf( "late" ) );
+	CHECK( CL_Plugins_Count() == 7 && StateOf( "late" ) == 0, "the new library is not listed and running (%d, state %d)", CL_Plugins_Count(), StateOf( "late" ) );
 	CHECK( FindPrint( "Client plugin 'late'" ) >= 0, "the new library was not started" );
 	ResetCounters();
 	CL_Plugins_Rescan();
-	CHECK( CL_Plugins_Count() == 6 && numTestPrints == 0, "a second scan did something (%d prints)", numTestPrints );
+	CHECK( CL_Plugins_Count() == 7 && numTestPrints == 0, "a second scan did something (%d prints)", numTestPrints );
 
 	CL_Plugins_CGameShutdown();
 	CL_Plugins_Shutdown();
 	remove( late );
 }
 
-// a plugin that crashed cannot be unloaded: the choice is kept for the next start
-static void TestCrashedToggle( void )
+// a plugin that trapped is stopped; switching it off and on is another try
+static void TestStoppedToggle( void )
 {
 	char file[256], text[256];
 
-	printf( "switching off a crashed plugin\n" );
-	WriteDisabled( "oldexp\nbadver\nbadsize\nrefuse\n" );
+	printf( "switching a plugin that was stopped off and on\n" );
+	WriteDisabled( "second\nbadver\nbadimport\nrefuse\nnoio\n" );
 	memset( mock, 0, sizeof( *mock ) );
 	SetUpGame();
 	CL_Plugins_Init();
@@ -780,21 +747,31 @@ static void TestCrashedToggle( void )
 	mock->crashInDraw3D = 1;
 	Frame3D();
 	mock->crashInDraw3D = 0;
-	CHECK( StateOf( "mock" ) == 3, "state %d after the crash", StateOf( "mock" ) );
+	CHECK( StateOf( "mock" ) == 3, "state %d after the trap", StateOf( "mock" ) );
+	ListedState( "mock", 2, text, sizeof( text ) );
+	CHECK( strstr( text, "stopped in draw3d" ) != NULL && strstr( text, "out of bounds" ) != NULL, "reason of the trap: '%s'", text );
+	ListedState( "mock", 1, text, sizeof( text ) );
+	CHECK( text[0] == '\0', "a stopped plugin shows a version: '%s'", text );
 
 	CHECK( CL_Plugins_SetEnabled( "mock", 0 ) == 1, "SetEnabled gave 0" );
-	CHECK( StateOf( "mock" ) == 3 && mock->shutdownCalls == 0, "a crashed plugin was changed or called (state %d)", StateOf( "mock" ) );
+	CHECK( StateOf( "mock" ) == 4 && mock->shutdownCalls == 0, "a stopped plugin was called (state %d)", StateOf( "mock" ) );
 	ListedState( "mock", 3, text, sizeof( text ) );
 	CHECK( !strcmp( text, "1" ), "the choice is not shown" );
-	ListedState( "mock", 1, text, sizeof( text ) );
-	CHECK( text[0] == '\0', "a crashed plugin shows a version: '%s'", text );
-	ListedState( "mock", 2, text, sizeof( text ) );
-	CHECK( strstr( text, "crashed in Draw3D" ) != NULL, "reason of the crash: '%s'", text );
 	ReadDisabled( file, sizeof( file ) );
 	CHECK( strstr( file, "mock" ) != NULL, "the choice was not saved: '%s'", file );
-	CHECK( CL_Plugins_SetEnabled( "mock", 1 ) == 1 && StateOf( "mock" ) == 3 && mock->initCalls == 1, "a crashed plugin was started again" );
+
+	CHECK( CL_Plugins_SetEnabled( "mock", 1 ) == 1 && StateOf( "mock" ) == 0 && mock->initCalls == 2, "the plugin did not start again (state %d, init %d)", StateOf( "mock" ), mock->initCalls );
+	Frame3D();
+	CHECK( mock->draw3d == 1, "a plugin that was started again is not drawn (%d)", mock->draw3d );
 	ReadDisabled( file, sizeof( file ) );
 	CHECK( strstr( file, "mock" ) == NULL, "switching on was not saved: '%s'", file );
+
+	// a plugin that is stopped while it is on can be switched on again without going through off
+	mock->crashInDraw3D = 1;
+	Frame3D();
+	mock->crashInDraw3D = 0;
+	CHECK( StateOf( "mock" ) == 3, "second trap" );
+	CHECK( CL_Plugins_SetEnabled( "mock", 1 ) == 1 && StateOf( "mock" ) == 0, "switching on a stopped plugin is another try (state %d)", StateOf( "mock" ) );
 
 	CL_Plugins_CGameShutdown();
 	CL_Plugins_Shutdown();
@@ -807,20 +784,20 @@ static void TestDisabledFile( void )
 
 	printf( "the disabled file\n" );
 	// a byte order mark, other cases, windows line ends, comments, blank lines, a name with a path, a name that is not there
-	WriteDisabled( "\xEF\xBB\xBFMOCK\r\n\r\n# note\r\n  oldexp  \r\n../evil\r\nnosuch\r\nOLDEXP\r\n" );
+	WriteDisabled( "\xEF\xBB\xBFMOCK\r\n\r\n# note\r\n  second  \r\n../evil\r\nnosuch\r\nSECOND\r\n" );
 	SetUpGame();
 	CL_Plugins_Init();
-	CHECK( StateOf( "mock" ) == 4 && StateOf( "oldexp" ) == 4, "names were not read (%d %d)", StateOf( "mock" ), StateOf( "oldexp" ) );
+	CHECK( StateOf( "mock" ) == 4 && StateOf( "second" ) == 4, "names were not read (%d %d)", StateOf( "mock" ), StateOf( "second" ) );
 	CHECK( StateOf( "badver" ) == 2, "a plugin that is not in the file is off" );
 	ReadDisabled( file, sizeof( file ) );
-	CHECK( !strcmp( file, "mock\noldexp\n" ), "names of libraries that are gone are dropped, got '%s'", file );
+	CHECK( !strcmp( file, "mock\nsecond\n" ), "names of libraries that are gone are dropped, got '%s'", file );
 	CL_Plugins_Shutdown();
 
 	// nothing to clean up: the file is left alone
-	WriteDisabled( "oldexp\nmock\n" );
+	WriteDisabled( "second\nmock\n" );
 	CL_Plugins_Init();
 	ReadDisabled( file, sizeof( file ) );
-	CHECK( !strcmp( file, "oldexp\nmock\n" ), "a clean file was rewritten: '%s'", file );
+	CHECK( !strcmp( file, "second\nmock\n" ), "a clean file was rewritten: '%s'", file );
 	CL_Plugins_Shutdown();
 
 	// no file
@@ -830,79 +807,98 @@ static void TestDisabledFile( void )
 		snprintf( path, sizeof( path ), "%s/plugins/disabled", homeDir );
 		remove( path );
 		CL_Plugins_Init();
-		CHECK( StateOf( "mock" ) == 0 && StateOf( "oldexp" ) == 0, "without the file everything starts" );
+		CHECK( StateOf( "mock" ) == 0 && StateOf( "second" ) == 0, "without the file everything starts" );
 		CL_Plugins_Shutdown();
 		CHECK( !FileExists( "disabled" ), "the file was made without a reason" );
 	}
 }
 
-static void TestCrash( void )
+static void TestTraps( void )
 {
-	int draws, draws2d;
+	int draws, draws2d, secondDraws;
+	refdef_t fd = TestRefdef();
 
-	printf( "a plugin that crashes\n" );
+	printf( "plugins that trap\n" );
+	// the second plugin is on in this session; it must not be affected by the first one going down
+	CHECK( StateOf( "second" ) == 0, "second is not running (%d)", StateOf( "second" ) );
+	secondDraws = oldMock->draw3d;
+
 	mock->crashInDraw3D = 1;
 	ResetCounters();
 	Frame3D();
-	CHECK( FindPrint( "crashed in Draw3D" ) >= 0, "the crash was not reported" );
+	CHECK( FindPrint( "stopped in draw3d" ) >= 0, "the trap was not reported" );
+	CHECK( FindPrint( "out of bounds memory access" ) >= 0, "the reason was not reported" );
+	CHECK( oldMock->draw3d == secondDraws + 1, "the plugin after the trapped one was not called (%d)", oldMock->draw3d - secondDraws );
 	draws = mock->draw3d;
 	draws2d = mock->draw2d;
 
 	mock->crashInDraw3D = 0;
 	Frame3D();
-	CHECK( mock->draw3d == draws, "Draw3D was called again after the crash" );
-	{
-		refdef_t fd = TestRefdef();
-
-		CL_Plugins_AfterScene( &fd );
-	}
-	CHECK( mock->draw2d == draws2d, "Draw2D was called after the crash" );
+	CHECK( mock->draw3d == draws, "draw3d was called again after the trap" );
+	CL_Plugins_AfterScene( &fd );
+	CHECK( mock->draw2d == draws2d, "draw2d was called after the trap" );
+	CHECK( oldMock->draw3d == secondDraws + 2 && oldMock->draw2d >= 1, "the other plugin stopped too" );
 
 	numTestPrints = 0;
 	CL_Plugins_CGameShutdown();
 	CL_Plugins_Shutdown();
-	CHECK( FindPrint( "bye" ) < 0, "Shutdown was called on a crashed plugin" );
+	CHECK( FindPrint( "bye" ) >= 0, "shutdown was not called on the plugin that is fine" );
+	CHECK( mock->shutdownCalls == 0, "shutdown was called on a plugin that trapped" );
+}
+
+// a pointer outside of the memory of the plugin, and a plugin that never returns
+static void TestBadBehaviour( void )
+{
+	int calls;
+
+	printf( "a bad pointer and an endless loop\n" );
+	WriteDisabled( "second\nbadver\nbadimport\nrefuse\nnoio\n" );
+	memset( mock, 0, sizeof( *mock ) );
+	numAddedCommands = 0;
+	SetUpGame();
+	CL_Plugins_Init();
+	CL_Plugins_MapLoad( "maps/test.bsp" );
+
+	// the engine does not touch a pointer outside of the memory of the plugin, and stops the plugin
+	mock->badPointerInDraw3D = 1;
+	ResetCounters();
+	Frame3D();
+	CHECK( StateOf( "mock" ) == 3, "state %d after a bad pointer", StateOf( "mock" ) );
+	CHECK( FindPrint( "stopped in draw3d" ) >= 0, "no report for a bad pointer" );
+
+	// an endless loop runs out of its budget instead of hanging the game
+	mock->badPointerInDraw3D = 0;
+	CHECK( CL_Plugins_SetEnabled( "mock", 1 ) == 1 && StateOf( "mock" ) == 0, "restart (%d)", StateOf( "mock" ) );
+	{
+		int idx = -1, i;
+
+		for ( i = 0; i < numAddedCommands; i++ ) {
+			if ( !strcmp( addedCommands[i], "mock_cmd" ) ) idx = i;
+		}
+		CHECK( idx >= 0, "the command of the restarted plugin" );
+		mock->loopInCommand = 1;
+		calls = mock->commandCalls;
+		ResetCounters();
+		if ( idx >= 0 ) {
+			snprintf( stCmdArgs[0], sizeof( stCmdArgs[0] ), "mock_cmd" );
+			stCmdArgc = 1;
+			addedCommandFn[idx]();
+		}
+		CHECK( StateOf( "mock" ) == 3, "the endless loop was not stopped (state %d, calls %d -> %d)", StateOf( "mock" ), calls, mock->commandCalls );
+		CHECK( FindPrint( "instruction limit" ) >= 0, "the reason was not the budget" );
+		CHECK( !CommandRegistered( "mock_cmd" ), "the command of a stopped plugin stayed" );
+	}
+	CL_Plugins_CGameShutdown();
+	CL_Plugins_Shutdown();
 }
 
 int main( int argc, char **argv )
 {
-	void *lib;
-	char path[512];
-
 	if ( argc < 2 ) {
 		fprintf( stderr, "usage: client_plugin_test <home dir>\n" );
 		return 2;
 	}
 	homeDir = argv[1];
-
-	snprintf( path, sizeof( path ), "%s/plugins/mock%s", homeDir,
-#ifdef _WIN32
-		".dll"
-#else
-		".so"
-#endif
-	);
-	lib = OpenModule( path );
-	if ( !lib ) {
-		fprintf( stderr, "cannot load %s\n", path );
-		return 2;
-	}
-	mock = ( (mockState_t *( * )( void ))LoadSym( lib, "Mock_State" ) )();
-	{
-		void *oldLib;
-
-		snprintf( path, sizeof( path ), "%s/plugins/oldexp%s", homeDir,
-#ifdef _WIN32
-			".dll"
-#else
-			".so"
-#endif
-		);
-		oldLib = OpenModule( path );
-		if ( oldLib ) {
-			oldMock = ( (mockState_t *( * )( void ))LoadSym( oldLib, "Mock_State" ) )();
-		}
-	}
 
 	Stubs_InitRenderer();
 	Test_SetCvar( "fs_homepath", homeDir, 0 );
@@ -910,9 +906,11 @@ int main( int argc, char **argv )
 	Test_SetCvar( "mock_secret", "hush", CVAR_PRIVATE );
 	Test_SetCvar( "mock_visible", "yes", 0 );
 	Test_SetCvar( "mock_rom", "from an old config", 0 );
+	Test_SetCvar( "rconpassword", "topsecret", 0 );
+	Test_SetCvar( "cg_draw2D", "1", 0 );
 
 	// ---- a session that ends normally ----
-	WriteDisabled( "oldexp\n" );
+	WriteDisabled( "second\n" );
 	SetUpGame();
 	CL_Plugins_Init();
 	TestLoading();
@@ -936,18 +934,18 @@ int main( int argc, char **argv )
 		CHECK( mock->draw3d == draws, "a plugin was called after Shutdown" );
 	}
 
-	TestOldExports();
-
-	// ---- a session where the plugin crashes ----
+	// ---- a session where one plugin traps and another one does not ----
 	memset( mock, 0, sizeof( *mock ) );
-	WriteDisabled( "oldexp\nbadver\nbadsize\nrefuse\n" );
+	memset( oldMock, 0, sizeof( *oldMock ) );
+	WriteDisabled( "badver\nbadimport\nrefuse\nnoio\n" );
 	SetUpGame();
 	CL_Plugins_Init();
 	CL_Plugins_MapLoad( "maps/test.bsp" );
-	TestCrash();
+	TestTraps();
 
+	TestBadBehaviour();
 	TestToggle();
-	TestCrashedToggle();
+	TestStoppedToggle();
 	TestDisabledFile();
 
 	if ( failures ) {

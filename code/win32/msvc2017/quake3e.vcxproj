@@ -348,7 +348,8 @@
     <ClCompile Include="..\..\server\sv_main.c" />
     <ClCompile Include="..\..\server\sv_net_chan.c" />
     <ClCompile Include="..\..\server\sv_plugin.c" />
-    <ClCompile Include="..\..\server\sv_plugin_guard.c" />
+    <ClCompile Include="..\..\server\sv_http.c" />
+    <ClCompile Include="..\..\qcommon\odf_wasm.c" />
     <ClCompile Include="..\..\server\sv_snapshot.c" />
     <ClCompile Include="..\..\server\sv_world.c" />
     <ClCompile Include="..\win_input.c" />

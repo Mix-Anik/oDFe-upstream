@@ -1,118 +1,263 @@
 /*
-A stand-in for the records plugin, controlled by the test program through the exported Mock_* functions.
-It answers logins like the real plugin would (synchronously or on a later Frame) and can crash on request.
+A stand-in for the records plugin (built for WebAssembly), controlled by the test program through mock_state.h. It answers
+logins like the real plugin would (synchronously or on a later frame), logs the events it gets, and does what the events
+"query" and "act" ask for, so the test can see what the engine lets a plugin do.
+
+With -DLITE it does not import the functions that need capabilities: it is a plugin that asks for nothing.
 */
 
-#include <stdio.h>
 #include <string.h>
 
-#include "odf_plugin_api.h"
+#include "odfs.h"
+#include "mock_state.h"
 
-static const odfPluginImport_t *eng;
+ODF_IMPORT( "odfs", "TestPull" ) void odfs_TestPull( void *state, int size );
+ODF_IMPORT( "odfs", "TestPush" ) void odfs_TestPush( const void *state, int size );
 
-#define MAX_LOG		32
-static char logName[MAX_LOG][32];
-static char logData[MAX_LOG][1100];
-static int logCount;
+ODF_DEFINE_IO()
 
-static int mode;						// 0 answer in OnEvent, 1 answer in the next Frame, 2 never answer
-static int resultCode = ODF_AUTHRES_OK;
-static int64_t resultID = 42;
-static char resultName[40] = "mix";
-static char resultReason[40];
+#ifndef PFX
+#define PFX "mock"
+#endif
+
+#ifdef WANTS
+ODF_MANIFEST( "version=wants 1\ncaps=chat,http" )
+#elif defined( LITE )
+ODF_MANIFEST( "version=lite 1" )
+#else
+ODF_MANIFEST( "version=mock 1" )
+#endif
+
+static mockState_t st;
 static int pendingClient = -1, pendingSerial;
-static int frames;
-static volatile int *volatile nullPtr;
 
-ODF_EXPORT void Mock_Setup( int newMode, int result, long long id, const char *name, const char *reason )
+static void Begin( void ) { odfs_TestPull( &st, (int)sizeof( st ) ); }
+static void End( void ) { odfs_TestPush( &st, (int)sizeof( st ) ); }
+
+static void Copy( char *dst, const char *src, int size )
 {
-	mode = newMode;
-	resultCode = result;
-	resultID = id;
-	snprintf( resultName, sizeof( resultName ), "%s", name ? name : "" );
-	snprintf( resultReason, sizeof( resultReason ), "%s", reason ? reason : "" );
+	int i;
+
+	for ( i = 0; i < size - 1 && src[i]; i++ ) {
+		dst[i] = src[i];
+	}
+	dst[i] = '\0';
 }
 
-ODF_EXPORT int Mock_EventCount( void ) { return logCount; }
-ODF_EXPORT const char *Mock_EventName( int i ) { return i >= 0 && i < logCount ? logName[i] : ""; }
-ODF_EXPORT const char *Mock_EventData( int i ) { return i >= 0 && i < logCount ? logData[i] : ""; }
-ODF_EXPORT int Mock_Frames( void ) { return frames; }
-ODF_EXPORT int Mock_Client( int clientNum, odfClientInfo_t *out ) { return eng->GetClientInfo( clientNum, out ); }
-ODF_EXPORT void Mock_ClearLog( void ) { logCount = 0; }
-
-static void Answer( int client, int serial )
+static int ToInt( const char *s )
 {
-	eng->AuthResult( client, serial, resultCode, resultID, resultName, resultReason[0] ? resultReason : NULL );
+	int v = 0, neg = 0;
+
+	if ( *s == '-' ) {
+		neg = 1;
+		s++;
+	}
+	while ( *s >= '0' && *s <= '9' ) {
+		v = v * 10 + ( *s++ - '0' );
+	}
+	return neg ? -v : v;
 }
 
+// tiny info string reader, enough for the test
 static void Info( const char *data, const char *key, char *out, int size )
 {
-	// tiny info string reader, enough for the test
 	char pattern[48];
-	const char *p;
+	int i = 0, k = 0;
+	const char *p = data;
 
 	out[0] = '\0';
-	snprintf( pattern, sizeof( pattern ), "\\%s\\", key );
-	p = strstr( data, pattern );
-	if ( p ) {
-		int i = 0;
-
-		p += strlen( pattern );
-		while ( *p && *p != '\\' && i < size - 1 ) {
-			out[i++] = *p++;
+	pattern[k++] = '\\';
+	while ( *key && k < 44 ) {
+		pattern[k++] = *key++;
+	}
+	pattern[k++] = '\\';
+	pattern[k] = '\0';
+	while ( *p ) {
+		if ( !strncmp( p, pattern, k ) ) {
+			p += k;
+			while ( *p && *p != '\\' && i < size - 1 ) {
+				out[i++] = *p++;
+			}
+			out[i] = '\0';
+			return;
 		}
-		out[i] = '\0';
+		p++;
 	}
 }
 
-static void OnEvent( const char *name, const char *data )
+#ifndef LITE
+static void Answer( int client, int serial )
 {
-	if ( logCount < MAX_LOG ) {
-		snprintf( logName[logCount], sizeof( logName[0] ), "%s", name );
-		snprintf( logData[logCount], sizeof( logData[0] ), "%s", data );
-		logCount++;
-	}
+	odfs_AuthResult( client, serial, st.resultCode, st.resultID, st.resultName, st.resultReason[0] ? st.resultReason : NULL );
+}
+#endif
 
-	if ( !strcmp( name, "crash" ) ) {
-		*nullPtr = 1;
-	} else if ( !strcmp( name, "auth_response" ) ) {
-		char client[16], serial[16];
+// what the test asks the plugin to try: \a\<action>\n\<name>\d\<data>\c\<client>
+static void Act( const char *data )
+{
+	char action[24], name[64], text[200], client[8];
 
-		Info( data, "client", client, sizeof( client ) );
-		Info( data, "serial", serial, sizeof( serial ) );
-		if ( mode == 0 ) {
-			Answer( atoi( client ), atoi( serial ) );
-		} else if ( mode == 1 ) {
-			pendingClient = atoi( client );
-			pendingSerial = atoi( serial );
+	Info( data, "a", action, sizeof( action ) );
+	Info( data, "n", name, sizeof( name ) );
+	Info( data, "d", text, sizeof( text ) );
+	Info( data, "c", client, sizeof( client ) );
+	st.actResult = -99;
+	st.actText[0] = '\0';
+
+	if ( !strcmp( action, "cmd" ) ) {
+		odfs_SendServerCommand( ToInt( client ), text );
+		st.actResult = 1;
+	} else if ( !strcmp( action, "cvar" ) ) {
+		char buf[64];
+
+		odfs_CvarRegister( name, text, ODF_CVAR_PRIVATE );
+		odfs_CvarString( name, buf, sizeof( buf ) );
+		Copy( st.actText, buf, sizeof( st.actText ) );
+		st.actResult = 1;
+	} else if ( !strcmp( action, "cvarread" ) ) {
+		char buf[64];
+
+		odfs_CvarString( name, buf, sizeof( buf ) );
+		Copy( st.actText, buf, sizeof( st.actText ) );
+		st.actResult = odfs_CvarInteger( name );
+	} else if ( !strcmp( action, "spin" ) ) {
+		volatile int spin = 0;
+
+		for ( ;; ) {
+			spin++;
 		}
+	} else if ( !strcmp( action, "badptr" ) ) {
+		odfs_GetClientInfo( 0, (odfClientInfo_t *)0x7ffffff0 );
 	}
+#ifndef LITE
+	else if ( !strcmp( action, "storew" ) ) {
+		st.actResult = odfs_StoreWrite( name, text, (int)strlen( text ), 0 );
+	} else if ( !strcmp( action, "storea" ) ) {
+		st.actResult = odfs_StoreWrite( name, text, (int)strlen( text ), 1 );
+	} else if ( !strcmp( action, "storer" ) ) {
+		st.readLen = odfs_StoreRead( name, ToInt( text ), st.readBuf, sizeof( st.readBuf ) - 1 );
+		if ( st.readLen >= 0 ) {
+			st.readBuf[st.readLen] = '\0';
+		}
+		st.actResult = st.readLen;
+	} else if ( !strcmp( action, "stores" ) ) {
+		st.actResult = odfs_StoreSize( name );
+	} else if ( !strcmp( action, "stored" ) ) {
+		st.actResult = odfs_StoreDelete( name );
+	} else if ( !strcmp( action, "storefill" ) ) {
+		// writes 1 MB pieces until the engine says no: how much fits
+		static char piece[1024];
+		int i, pieces = 0;
+
+		memset( piece, 'x', sizeof( piece ) );
+		for ( i = 0; i < 20; i++ ) {
+			int k, ok = 1;
+
+			for ( k = 0; k < 1024 && ok; k++ ) {
+				ok = odfs_StoreWrite( name, piece, (int)sizeof( piece ), 1 );
+			}
+			if ( !ok ) {
+				break;
+			}
+			pieces++;
+		}
+		st.actResult = pieces;
+	} else if ( !strcmp( action, "http" ) ) {
+		st.actResult = odfs_HttpRequest( ToInt( client ), text,
+			"Authorization: Bearer secret\nContent-Type: application/json\nX-Evil: 1\nHost: elsewhere", "{}", 2, 5000 );
+	} else if ( !strcmp( action, "httpbody" ) ) {
+		char buf[64];
+
+		st.actResult = odfs_HttpBody( ToInt( text ), 0, buf, sizeof( buf ) );		// outside of on_http: nothing
+	}
+#endif
 }
 
-static void Frame( int serverTimeMs )
+int odfs_init( void )
 {
-	(void)serverTimeMs;
-	frames++;
+	Begin();
+	st.initCalls++;
+	odfs_Print( "mock plugin ready" );
+	End();
+	return 0;
+}
+
+void odfs_frame( int serverTime )
+{
+	Begin();
+	st.frames++;
+#ifndef LITE
 	if ( pendingClient >= 0 ) {
 		int c = pendingClient;
 
 		pendingClient = -1;
 		Answer( c, pendingSerial );
 	}
+#endif
+	End();
 }
 
-static int Init( void )
+void odfs_on_event( const char *name, const char *data )
 {
-	eng->Print( "mock plugin ready" );
-	return 0;
+	char target[32];
+
+	// events with a 	\<plugin> in them are for that plugin only (the test has several copies of this one)
+	Info( data, "t", target, sizeof( target ) );
+	if ( target[0] && strcmp( target, PFX ) ) {
+		return;
+	}
+	Begin();
+	if ( st.eventCount < MOCK_MAX_LOG ) {
+		Copy( st.eventName[st.eventCount], name, sizeof( st.eventName[0] ) );
+		Copy( st.eventData[st.eventCount], data, sizeof( st.eventData[0] ) );
+		st.eventCount++;
+	}
+
+	if ( !strcmp( name, "crash" ) ) {
+		*(volatile int *)0x7ffffff0 = 1;
+	} else if ( !strcmp( name, "query" ) ) {
+		char client[8];
+
+		Info( data, "client", client, sizeof( client ) );
+		st.infoOk = odfs_GetClientInfo( ToInt( client ), &st.info );
+	} else if ( !strcmp( name, "act" ) ) {
+		Act( data );
+	}
+#ifndef LITE
+	else if ( !strcmp( name, "auth_response" ) ) {
+		char client[16], serial[16];
+
+		Info( data, "client", client, sizeof( client ) );
+		Info( data, "serial", serial, sizeof( serial ) );
+		if ( st.mode == 0 ) {
+			Answer( ToInt( client ), ToInt( serial ) );
+		} else if ( st.mode == 1 ) {
+			pendingClient = ToInt( client );
+			pendingSerial = ToInt( serial );
+		}
+	}
+#endif
+	End();
 }
 
-static const odfPluginExport_t exports = {
-	ODF_PLUGIN_API_VERSION, "mock", "mock 1", ODF_PLUGIN_FLAG_AUTH, Init, 0, Frame, OnEvent
-};
-
-ODF_EXPORT const odfPluginExport_t *ODF_PluginEntry( const odfPluginImport_t *imp )
+#ifndef LITE
+void odfs_on_http( int id, int status, int bodyLen )
 {
-	eng = imp;
-	return &exports;
+	Begin();
+	if ( st.httpDone < 4 ) {
+		int n = st.httpDone++;
+
+		st.httpId[n] = id;
+		st.httpStatus[n] = status;
+		st.httpBodyLen[n] = bodyLen;
+		{
+			char buf[64];
+			int got = odfs_HttpBody( id, 0, buf, sizeof( buf ) - 1 );
+
+			buf[got > 0 ? got : 0] = '\0';
+			Copy( st.httpBody[n], buf, sizeof( st.httpBody[0] ) );
+		}
+	}
+	End();
 }
+#endif

@@ -474,7 +474,7 @@ void CL_Auth_Init( void );
 qboolean CL_Auth_ServerCommand( const char *s );
 void CL_Auth_Disconnected( void );
 
-// cl_plugin.c - native client plugins (odf_client_plugin_api.h)
+// cl_plugin.c - sandboxed client plugins, see code/plugin_api/client.api
 void CL_Plugins_Init( void );
 void CL_Plugins_Shutdown( void );
 

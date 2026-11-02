@@ -1,17 +1,24 @@
 #ifndef MOCK_STATE_H
 #define MOCK_STATE_H
 
-#include "odf_client_plugin_api.h"
+#include "odfc_types.h"
 
-// what the mock plugin saw and got back, read by the test program
+// What the mock plugin saw and got back, and what the test program tells it to do. The plugin runs in its sandbox: it copies
+// this struct to the test program at the end of every call (Test_MirrorPush) and takes it back at the start of the next
+// (Test_MirrorPull), so both sides see the same values and a restart of the plugin does not lose them.
 typedef struct {
-	int				crashInDraw3D;		// set by the test: the next Draw3D dereferences NULL
+	int				crashInDraw3D;		// set by the test: the next draw3d reads memory outside of the sandbox
+	int				loopInCommand;		// the next command never returns
+	int				badPointerInDraw3D;	// the next draw3d hands a pointer outside of its memory to the engine
 
 	int				initCalls, shutdownCalls;
 	int				cvarDefault;		// CvarInteger of a cvar the mock registered with a default
 	float			cvarValue;
 	char			secretSeen[64];		// what CvarString returned for a private cvar
 	char			visibleSeen[64];
+	char			notOwnedSeen[64];	// a cvar of the game that is not on the list of readable ones
+	char			readableSeen[64];	// one that is
+	int				cvarReserved;		// 1 when the engine let the mock create a reserved name
 
 	int				mapLoads;
 	char			lastMap[64];
@@ -22,7 +29,7 @@ typedef struct {
 	odfcView_t		view;
 	int				snapOk;
 	odfcSnapshot_t	snap;
-	odfcTrace_t		traceGood, traceNaN, traceNull;
+	odfcTrace_t		traceGood, traceNaN;
 	int				cheatsFlag;
 	int				psOk;
 	odfcPlayerState_t	ps;
@@ -36,9 +43,8 @@ typedef struct {
 	int				cmdRegistered, cmdBadName, cmdTaken, cmdSecond;
 	int				commandCalls, commandArgc;
 	char			commandName[32], commandArg1[32];
-	int				filterCalls, filterArgs[4], filterResult;	// set filterResult for what FilterSound returns
+	int				filterCalls, filterArgs[4], filterResult;	// set filterResult for what filter_sound returns
 	int				romSeen;
-	int				crashInCommand;
 	int				drawModelFrom3D;
 
 	int				draw2d;

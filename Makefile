@@ -228,6 +228,7 @@ BLIBDIR=$(MOUNT_DIR)/botlib
 JPDIR=$(MOUNT_DIR)/libjpeg
 OGGDIR=$(MOUNT_DIR)/libogg
 VORBISDIR=$(MOUNT_DIR)/libvorbis
+WAMR=$(MOUNT_DIR)/wasm/wamr/core
 
 bin_path=$(shell which $(1) 2> /dev/null)
 
@@ -482,6 +483,8 @@ ifdef MINGW
       CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib64
     endif
     CLIENT_LDFLAGS += -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32
+    # the dedicated server makes HTTP requests for its plugins
+    SERVER_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib64 -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32 -lwldap32 -lbcrypt
   endif
 
   ifeq ($(USE_PCRE2),1)
@@ -712,6 +715,39 @@ else
     RENDCFLAGS=$(NOTSHLIBCFLAGS)
 endif
 
+#############################################################################
+## WEBASSEMBLY RUNTIME OF THE PLUGINS (code/wasm, built into the client and the server)
+#############################################################################
+
+WAMR_CPU = $(ARCH)
+ifdef MINGW
+  WAMR_WINDOWS = 1
+endif
+include $(MOUNT_DIR)/wasm/wamr.mk
+
+WAMR_CFLAGS = $(WAMR_TARGET) $(WAMR_DEFS) $(WAMR_INC)
+
+# the code of the runtime is not ours: no warnings, no strict flags
+define DO_WAMR_CC
+$(echo_cmd) "WAMR_CC $<"
+$(Q)$(CC) $(CFLAGS) $(WAMR_CFLAGS) $(WAMR_SAFE) -w -o $@ -c $<
+endef
+
+define DO_WAMR_CC_DED
+$(echo_cmd) "WAMR_DED_CC $<"
+$(Q)$(CC) $(CFLAGS) $(WAMR_CFLAGS) $(WAMR_SAFE) -w -DDEDICATED -o $@ -c $<
+endef
+
+define DO_WAMR_AS
+$(echo_cmd) "WAMR_AS $<"
+$(Q)$(CC) -c -o $@ $<
+endef
+
+WAMR_OBJ = $(addprefix $(B)/client/wasm/,$(addsuffix .o,$(WAMR_BASENAMES))) $(B)/client/wasm/$(WAMR_INVOKE).o
+WAMR_DOBJ = $(addprefix $(B)/ded/wasm/,$(addsuffix .o,$(WAMR_BASENAMES))) $(B)/ded/wasm/$(WAMR_INVOKE).o
+
+BASE_CFLAGS += -I$(WAMR)/iwasm/include -DWASM_RUNTIME_API_EXTERN=
+
 define DO_CC
 $(echo_cmd) "CC $<"
 $(Q)$(CC) $(CFLAGS) -o $@ -c $<
@@ -834,6 +870,8 @@ makedirs:
 	@if [ ! -d $(B) ];then $(MKDIR) $(B);fi
 	@if [ ! -d $(B)/client ];then $(MKDIR) $(B)/client/qvm;fi
 	@if [ ! -d $(B)/client/jpeg ];then $(MKDIR) $(B)/client/jpeg;fi
+	@if [ ! -d $(B)/client/wasm ];then $(MKDIR) $(B)/client/wasm;fi
+	@if [ ! -d $(B)/ded/wasm ];then $(MKDIR) $(B)/ded/wasm;fi
 ifeq ($(USE_SYSTEM_OGG),0)
 	@if [ ! -d $(B)/client/ogg ];then $(MKDIR) $(B)/client/ogg;fi
 endif
@@ -1130,6 +1168,7 @@ Q3OBJ = \
   $(B)/client/auth_proto.o \
   $(B)/client/monocypher.o \
   $(B)/client/monocypher-ed25519.o \
+  $(B)/client/odf_wasm.o \
   \
   $(B)/client/snd_adpcm.o \
   $(B)/client/snd_dma.o \
@@ -1151,7 +1190,7 @@ Q3OBJ = \
   $(B)/client/sv_main.o \
   $(B)/client/sv_net_chan.o \
   $(B)/client/sv_plugin.o \
-  $(B)/client/sv_plugin_guard.o \
+  $(B)/client/sv_http.o \
   $(B)/client/sv_snapshot.o \
   $(B)/client/sv_world.o \
   \
@@ -1249,6 +1288,8 @@ ifeq ($(HAVE_VM_COMPILED),true)
     Q3OBJ += $(B)/client/qvm/vm_powerpc.o
   endif
 endif
+
+Q3OBJ += $(WAMR_OBJ)
 
 ifeq ($(USE_CURL),1)
   Q3OBJ += $(B)/client/cl_curl.o
@@ -1359,7 +1400,7 @@ Q3DOBJ = \
   $(B)/ded/sv_main.o \
   $(B)/ded/sv_net_chan.o \
   $(B)/ded/sv_plugin.o \
-  $(B)/ded/sv_plugin_guard.o \
+  $(B)/ded/sv_http.o \
   $(B)/ded/sv_snapshot.o \
   $(B)/ded/sv_world.o \
   \
@@ -1384,6 +1425,7 @@ Q3DOBJ = \
   $(B)/ded/auth_proto.o \
   $(B)/ded/monocypher.o \
   $(B)/ded/monocypher-ed25519.o \
+  $(B)/ded/odf_wasm.o \
   \
   $(B)/ded/q_math.o \
   $(B)/ded/q_shared.o \
@@ -1418,6 +1460,8 @@ Q3DOBJ = \
   $(B)/ded/l_precomp.o \
   $(B)/ded/l_script.o \
   $(B)/ded/l_struct.o
+
+Q3DOBJ += $(WAMR_DOBJ)
 
 ifdef MINGW
   Q3DOBJ += \
@@ -1460,7 +1504,7 @@ endif
 $(B)/$(TARGET_SERVER): $(Q3DOBJ)
 	$(echo_cmd) $(Q3DOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) -o $@ $(Q3DOBJ) $(LDFLAGS)
+	$(Q)$(CC) -o $@ $(Q3DOBJ) $(LDFLAGS) $(SERVER_LDFLAGS)
 
 #############################################################################
 ## CLIENT/SERVER RULES
@@ -1495,6 +1539,22 @@ $(B)/client/vorbis/%.o: $(VORBISDIR)/lib/%.c
 
 $(B)/client/%.o: $(SDLDIR)/%.c
 	$(DO_CC)
+
+define WAMR_RULES
+$$(B)/client/wasm/%.o: $$(WAMR)/$(1)/%.c
+	$$(DO_WAMR_CC)
+
+$$(B)/ded/wasm/%.o: $$(WAMR)/$(1)/%.c
+	$$(DO_WAMR_CC_DED)
+endef
+$(foreach d,$(WAMR_DIRS),$(eval $(call WAMR_RULES,$(d))))
+
+$(B)/client/wasm/%.o: $(WAMR)/iwasm/common/arch/%.s
+	$(DO_WAMR_AS)
+
+$(B)/ded/wasm/%.o: $(WAMR)/iwasm/common/arch/%.s
+	$(DO_WAMR_AS)
+
 
 $(B)/rend1/%.o: $(R1DIR)/%.c
 	$(DO_REND_CC)
