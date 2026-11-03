@@ -12,7 +12,8 @@ API=../../code/plugin_api
 SDK=$API/sdk
 $PYTHON $API/gen_api.py --api sdk.api "$OUT" > /dev/null
 
-ODF_TOOLS=$Q3TOOLS $PYTHON $SDK/odf-build.py --test -I"$OUT/include" --syscalls "$OUT/include/odft_syscalls.asm" -I. -o "$OUT/plugin.qvm" sdk_test.c
+gcc -O2 -Wall -o "$OUT/odf-build" $SDK/odf-build.c
+ODF_TOOLS=$Q3TOOLS "$OUT/odf-build" --sdk $API --test -I"$OUT/include" --syscalls "$OUT/include/odft_syscalls.asm" -I. -o "$OUT/plugin.qvm" sdk_test.c
 
 gcc -O2 -g -Wall -Wno-unused-function -Wno-format-truncation -I$Q -I$API -I"$OUT/generated" -I. -I../plugin_vm -o "$OUT/sdk_test" \
 	harness.c ../plugin_vm/stubs.c \

@@ -19,7 +19,7 @@ include/    odf_common.h, odfc.h, odfs.h, the type headers, the entry points (od
             engine functions for the assembler (odfc_syscalls.asm, odfs_syscalls.asm): all but odf_common.h and the type
             headers are generated from client.api / server.api / common.api by gen_api.py
 sdk/        this folder
-  odf-build.py   builds a plugin
+  odf-build.c    the program that builds a plugin (one C file, no libraries)
   odf_lib.c      the C library: string.h, ctype.h, stdlib.h (strtol, strtof, qsort, rand), math.h, stdio.h (snprintf)
   libc/          the headers of that library
 ```
@@ -59,12 +59,16 @@ export, the linker says `Multiple definitions`: rename yours.
 Build it and put it in the `plugins` folder of the home path:
 
 ```
-python code/plugin_api/sdk/odf-build.py --client -o plugins/hello.qvm hello.c
+cc -O2 -o odf-build code/plugin_api/sdk/odf-build.c        (once; any C compiler)
+./odf-build --client -o plugins/hello.qvm hello.c
 ```
 
 `--server` builds a server plugin (`odfs.h`). The tools `q3lcc` and `q3asm` (with `q3cpp` and `q3rcc` next to them) are
-found in the PATH or in the folder named by `--tools` or the environment variable `ODF_TOOLS`. Other options: `-I`, `-D`,
-`--no-lib` (without odf_lib.c), `--map` (the map file of q3asm), `-v` (show the commands).
+found in the PATH or in the folder named by `--tools` or the environment variable `ODF_TOOLS`. `odf-build` finds the files
+of the SDK from its own place, when it is in `code/plugin_api/sdk` or in a folder that has `include/` and `sdk/`; if it is
+somewhere else, `--sdk` or the environment variable `ODF_SDK` name the folder `code/plugin_api`. Other options: `-I`,
+`-D`, `--no-lib` (without odf_lib.c), `--map` (the map file of q3asm), `-v` (show the commands). Nothing else is needed,
+Python is not.
 
 The first file of a program has to include the entry header; the program is the files in the order given, then the library
 (`odf_lib.c`), then the engine functions. The entry header makes `vmMain`, the one function the engine calls, and lists
@@ -104,7 +108,8 @@ The compiler is lcc of ioquake3, and the machine is the QVM:
 ## Engine functions
 
 `odfc.h` / `odfs.h` document every function: what it does, its capability, whether it is `cheats only`. They are generated
-from `client.api` / `server.api`; to add a function, add a line there and run `python gen_api.py`. The generated dispatcher
+from `client.api` / `server.api`; to add a function, add a line there and run `python gen_api.py` (only whoever changes
+the API needs Python: the generated files are in the repository). The generated dispatcher
 in the engine checks the pointers (`outbuf(size)`, `inbuf(size)`, `str`, `in(type, n)` ...) so no engine function has to.
 
 ## Testing

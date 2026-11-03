@@ -15,7 +15,7 @@ A plugin is a **QVM program** (C compiled with q3lcc, the bytecode of the Quake 
 
 The VM code is `code/qcommon/plugin_vm.c` with small additions in `vm_x86.c` and `vm_interpreted.c` that only apply to plugins (the game's own QVMs run as before). Operators and players are responsible for the plugins they install.
 
-**Writing a plugin** is described in [`code/plugin_api/sdk/README.md`](../code/plugin_api/sdk/README.md): the SDK has the API headers (generated from [`client.api`](../code/plugin_api/client.api) / [`server.api`](../code/plugin_api/server.api), which are also the documentation of every function), a small C library and the build script `odf-build.py`. The plugin for the oDFe servers (online records) is built in its own project, `df-records-plugin`; the client plugin that replaces the cgame proxymod is `df-proxymod-plugin`.
+**Writing a plugin** is described in [`code/plugin_api/sdk/README.md`](../code/plugin_api/sdk/README.md): the SDK has the API headers (generated from [`client.api`](../code/plugin_api/client.api) / [`server.api`](../code/plugin_api/server.api), which are also the documentation of every function), a small C library and the build program `odf-build` (a single C file, `odf-build.c`). The plugin for the oDFe servers (online records) is built in its own project, `df-records-plugin`; the client plugin that replaces the cgame proxymod is `df-proxymod-plugin`.
 
 ### Server plugins
 

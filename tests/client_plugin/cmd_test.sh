@@ -5,9 +5,9 @@ set -e
 cd "$(dirname "$0")"
 OUT=${OUT:-build}
 Q3TOOLS=${Q3TOOLS:-/d/Other/Programming/C/oDFs/bin}
-PYTHON=${PYTHON:-python}
 mkdir -p "$OUT"
-ODF_TOOLS=$Q3TOOLS $PYTHON ../../code/plugin_api/sdk/odf-build.py --client -o "$OUT/cmdtest.qvm" cmd_plugin.c
+gcc -O2 -Wall -o "$OUT/odf-build" ../../code/plugin_api/sdk/odf-build.c
+ODF_TOOLS=$Q3TOOLS "$OUT/odf-build" --sdk ../../code/plugin_api --client -o "$OUT/cmdtest.qvm" cmd_plugin.c
 
 LOG="$OUT/cmd_test.log"
 ODF_SMOKE_COMMANDS=1 sh smoke.sh "$OUT/cmdtest.qvm" 10 > "$LOG"

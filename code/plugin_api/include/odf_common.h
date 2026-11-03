@@ -13,7 +13,7 @@ sdk/libc).
 A plugin has to
   * start its first source file with the entry point: define ODF_PLUGIN_VERSION (and ODF_PLUGIN_CAPS, ODF_PLUGIN_DESCRIPTION) and the list of exports it implements, then
     include odfc_entry.h or odfs_entry.h (the VM wants vmMain to be the first function of the program),
-  * be built with sdk/odf-build.py, which compiles the files, adds the library and the syscalls file of the API (the list
+  * be built with sdk/odf-build, which compiles the files, adds the library and the syscalls file of the API (the list
     of engine functions, last) and assembles the program. See sdk/README.md.
 ===========================================================================
 */
