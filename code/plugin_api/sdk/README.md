@@ -19,12 +19,17 @@ include/    odf_common.h, odfc.h, odfs.h, the type headers, the entry points (od
             engine functions for the assembler (odfc_syscalls.asm, odfs_syscalls.asm): all but odf_common.h and the type
             headers are generated from client.api / server.api / common.api by gen_api.py
 sdk/        this folder
-  odf-build.c    the program that builds a plugin (one C file, no libraries)
+  odf-build.c    the program that builds a plugin; it has the compiler in itself (see below), Makefile builds it
   odf_lib.c      the C library: string.h, ctype.h, stdlib.h (strtol, strtof, qsort, rand), math.h, stdio.h (snprintf)
   libc/          the headers of that library
+  examples/      hello.c (client) and hello_server.c (server): the smallest plugins
+  check.sh       a smoke test of a built odf-build (the CI runs it on every system)
+toolchain/  the compiler (lcc), its preprocessor and the assembler (q3asm), as in ioquake3: see toolchain/README.md
 ```
 
 ## A plugin
+
+This is `examples/hello.c`:
 
 ```c
 /* hello.c */
@@ -59,20 +64,39 @@ export, the linker says `Multiple definitions`: rename yours.
 Build it and put it in the `plugins` folder of the home path:
 
 ```
-cc -O2 -o odf-build code/plugin_api/sdk/odf-build.c        (once; any C compiler)
-./odf-build --client -o plugins/hello.qvm hello.c
+make -C code/plugin_api/sdk            (once, with any C compiler; writes build/odf-build/odf-build)
+build/odf-build/odf-build --client -o plugins/hello.qvm hello.c
 ```
 
-`--server` builds a server plugin (`odfs.h`). The tools `q3lcc` and `q3asm` (with `q3cpp` and `q3rcc` next to them) are
-found in the PATH or in the folder named by `--tools` or the environment variable `ODF_TOOLS`. `odf-build` finds the files
-of the SDK from its own place, when it is in `code/plugin_api/sdk` or in a folder that has `include/` and `sdk/`; if it is
-somewhere else, `--sdk` or the environment variable `ODF_SDK` name the folder `code/plugin_api`. Other options: `-I`,
-`-D`, `--no-lib` (without odf_lib.c), `--map` (the map file of q3asm), `-v` (show the commands). Nothing else is needed,
-Python is not.
+`--server` builds a server plugin (`odfs.h`). `make OUT=folder` builds `odf-build` into another folder. Every engine release on GitHub also has a ready-made
+`odf-build-<system>.zip` (Windows, Linux x86_64 and arm64, macOS arm64) with `odf-build`, the license of lcc and the examples,
+so building it yourself is only needed for another system. `odf-build` is one program (one file for each system) that has everything in
+itself: the preprocessor, the compiler and the assembler, and the headers and the C library of the SDK. Nothing else is
+needed, neither Python nor the tools of ioquake3. The files it carries are the ones from the time it was built; `--sdk`
+or the environment variable `ODF_SDK` name a folder `code/plugin_api` to take them from instead. Other options: `-I`,
+`-D`, `--no-lib` (without odf_lib.c), `--map` (the map file of the assembler), `-v` (show the commands).
 
 The first file of a program has to include the entry header; the program is the files in the order given, then the library
 (`odf_lib.c`), then the engine functions. The entry header makes `vmMain`, the one function the engine calls, and lists
 which of the exports (`OnInit`, `OnDraw3D` ...) the program has. Leave out the ones you do not need.
+
+### A program of several files
+
+`odf-build` compiles and links the `.c` files given on the command line and no others; it does not look for files:
+
+```
+odf-build --client -Isrc -o plugins/myplugin.qvm src/main.c src/util.c src/hud.c
+```
+
+The file with the entry header goes first, the others in any order. `#include "x.h"` finds headers next to the `.c` file
+that includes them; `-I folder` adds other folders. A `*.c` in the command line works where the shell expands it (Linux,
+macOS, MSYS2), but then the entry file must still come first: a Makefile such as
+`SOURCES := src/main.c $(filter-out src/main.c,$(wildcard src/*.c))` does that. Every file is compiled on its own, so
+`static` functions and variables of the same name in different files do not collide; a name that is not `static` and is
+defined in two files does (`Multiple definitions`). The plugin repositories (`df-proxymod-plugin`, `df-records-plugin`) are
+examples with a Makefile.
+
+On Windows, build `odf-build` itself (`make -C code/plugin_api/sdk`) in an MSYS2 MINGW64 shell with `make` and `gcc`.
 
 The manifest is described by three macros before the entry header: `ODF_PLUGIN_VERSION` (required), `ODF_PLUGIN_CAPS` (the
 capabilities it needs, comma separated; it is not loaded when it was not given them) and `ODF_PLUGIN_DESCRIPTION`. The

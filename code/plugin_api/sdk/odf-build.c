@@ -1,5 +1,5 @@
 /*
-odf-build: builds an oDFe plugin (a QVM program) from C sources with q3lcc and q3asm.
+odf-build: builds an oDFe plugin (a QVM program) from C sources.
 
     odf-build --client -o plugins/myplugin.qvm main.c other.c
     odf-build --server -o plugins/myplugin.qvm -DDEBUG -Iinclude main.c
@@ -7,14 +7,12 @@ odf-build: builds an oDFe plugin (a QVM program) from C sources with q3lcc and q
 The first source file has to include the entry point (odfc_entry.h or odfs_entry.h), the VM wants it first in the program.
 The C library of the SDK (odf_lib.c) and the engine functions (odfc_syscalls.asm / odfs_syscalls.asm) are added at the end.
 
-Needs q3lcc, q3cpp, q3rcc and q3asm (the tools of ioquake3, ec- or oDFs builds). Give their folder with --tools or the
-environment variable ODF_TOOLS; without either they are searched for in the PATH.
+This one program has everything: the preprocessor, the compiler and the assembler (lcc and q3asm of ioquake3, in
+../toolchain) and the files of the SDK (headers, C library). It runs the tools as itself, one process for each step:
+"odf-build --run-tool cpp|rcc|asm ...". --sdk (or the environment variable ODF_SDK) names a folder code/plugin_api to use
+its files instead of the ones in the program.
 
-The files of the SDK (include/, sdk/libc/, sdk/odf_lib.c) are found from the place of this program: next to the sources
-(code/plugin_api/sdk) or in the folder of the program (include/ and sdk/ beside it). --sdk or ODF_SDK name the folder that
-has include/ and sdk/ (code/plugin_api) when it is somewhere else.
-
-Build it with any C compiler:  cc -O2 -o odf-build odf-build.c
+Build it with the Makefile of this folder.
 */
 
 #ifdef _MSC_VER
@@ -319,69 +317,6 @@ static char *abs_path( const char *path )
 #endif
 }
 
-/* the parts of a complete path */
-static int split_path( const char *path, char ***parts )
-{
-	char **v = (char **)xmalloc( ( strlen( path ) / 2 + 2 ) * sizeof( char * ) );
-	const char *p = path, *start;
-	int n = 0;
-
-	while ( *p ) {
-		while ( *p && is_sep( *p ) ) {
-			p++;
-		}
-		start = p;
-		while ( *p && !is_sep( *p ) ) {
-			p++;
-		}
-		if ( p > start ) {
-			v[n++] = xstrndup( start, p - start );
-		}
-	}
-	*parts = v;
-	return n;
-}
-
-static int same_part( const char *a, const char *b )
-{
-#ifdef _WIN32
-	return _stricmp( a, b ) == 0;
-#else
-	return strcmp( a, b ) == 0;
-#endif
-}
-
-/* 'path' as seen from the folder 'start', written with /; NULL when there is no way (another drive) */
-static char *rel_path( const char *path, const char *start )
-{
-	char **pp, **sp;
-	int pn = split_path( path, &pp ), sn = split_path( start, &sp );
-	int common = 0, i;
-	buf_t out = { 0 };
-
-#ifdef _WIN32
-	if ( pn == 0 || sn == 0 || !same_part( pp[0], sp[0] ) ) {
-		return NULL;
-	}
-#endif
-	while ( common < pn && common < sn && same_part( pp[common], sp[common] ) ) {
-		common++;
-	}
-	for ( i = common; i < sn; i++ ) {
-		buf_str( &out, out.n ? "/.." : ".." );
-	}
-	for ( i = common; i < pn; i++ ) {
-		if ( out.n ) {
-			buf_str( &out, "/" );
-		}
-		buf_str( &out, pp[i] );
-	}
-	if ( out.n == 0 ) {
-		buf_str( &out, "." );
-	}
-	return out.p;
-}
-
 static char *read_file( const char *path, size_t *size )
 {
 	FILE *f = fopen( path, "rb" );
@@ -491,33 +426,6 @@ static char **list_dir( const char *path, int *count )
 #endif
 	*count = n;
 	return names;
-}
-
-/* 'skip' is a folder inside the one being copied (the folder the copy goes to) */
-static void copy_tree( const char *from, const char *to, const char *skip, int depth )
-{
-	char **names;
-	int n, i;
-
-	if ( !make_dir( to ) && !is_dir( to ) ) {
-		die( "cannot create the folder %s", to );
-	}
-	if ( depth > 32 ) {
-		return;
-	}
-	names = list_dir( from, &n );
-	for ( i = 0; i < n; i++ ) {
-		char *a = path_join( from, names[i] ), *b = path_join( to, names[i] );
-
-		if ( skip && same_part( a, skip ) ) {
-			continue;
-		}
-		if ( is_dir( a ) ) {
-			copy_tree( a, b, skip, depth + 1 );
-		} else if ( is_file( a ) ) {
-			copy_file( a, b );
-		}
-	}
 }
 
 static void remove_tree( const char *path )
@@ -660,8 +568,8 @@ static char *find_in_path( const char *name )
 	return NULL;
 }
 
-/* the place of this program */
-static char *exe_folder( const char *argv0 )
+/* the file of this program */
+static char *exe_path( const char *argv0 )
 {
 	char *path = NULL;
 
@@ -695,7 +603,10 @@ static char *exe_folder( const char *argv0 )
 			path = find_in_path( argv0 );
 		}
 	}
-	return path ? path_dirname( path ) : NULL;
+	if ( !path ) {
+		die( "cannot find the file of this program" );
+	}
+	return path;
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */
@@ -795,7 +706,7 @@ static int run_program( char **argv, const char *cwd )
 
 static int verbose;
 
-static void run( char **argv, const char *cwd )
+static void run( char **argv, const char *cwd, const char *what )
 {
 	int rc;
 
@@ -810,7 +721,7 @@ static void run( char **argv, const char *cwd )
 	fflush( stdout );
 	rc = run_program( argv, cwd );
 	if ( rc != 0 ) {
-		die( "%s failed (%d)", path_basename( argv[0] ), rc );
+		die( "%s failed (%d)", what, rc );
 	}
 }
 
@@ -1112,6 +1023,22 @@ static void fix_assembly( const char *path )
 /* the program                                                                                                        */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
+/* The main functions of the three tools of the compiler (toolchain/): the preprocessor, the compiler and the assembler.
+   odf-build runs them as itself ("odf-build --run-tool cpp ..."), one process for each step as q3lcc did. */
+extern int cpp_main( int argc, char **argv );
+extern int rcc_main( int argc, char **argv );
+extern int asm_main( int argc, char **argv );
+
+/* the files of the SDK, written by mkembed (sdkdata.c) */
+typedef struct {
+	const char			*path;
+	const unsigned char	*data;
+	unsigned			size;
+} odfEmbedded_t;
+
+extern const odfEmbedded_t odf_embedded[];
+extern const int odf_num_embedded;
+
 static void usage( FILE *f )
 {
 	fprintf( f,
@@ -1124,11 +1051,10 @@ static void usage( FILE *f )
 		"  -o file               the plugin to write (name.qvm)\n"
 		"  -I folder             a folder for #include\n"
 		"  -D symbol[=value]     a preprocessor symbol\n"
-		"  --tools folder        the folder with q3lcc and q3asm (default: ODF_TOOLS, then the PATH)\n"
-		"  --sdk folder          the folder with include/ and sdk/ (default: found from the place of this program; ODF_SDK)\n"
+		"  --sdk folder          use the files of the SDK in this folder (code/plugin_api) instead of the ones in this program\n"
 		"  --no-lib              do not add the C library of the SDK (odf_lib.c)\n"
 		"  --syscalls file       the .asm of the engine functions (default: the one of the API)\n"
-		"  --map file            also write the map file of q3asm (where every function is)\n"
+		"  --map file            also write the map file of the assembler (where every function is)\n"
 		"  -v                    show the commands\n" );
 }
 
@@ -1142,85 +1068,6 @@ static const module_t modules[] = {
 	{ "odfs", "ODF_MODULE_SERVER" },
 	{ "odft", "ODF_MODULE_TEST" },
 };
-
-static char *find_tool( const char *name, const char *folder )
-{
-	char *candidates[2];
-	int i;
-
-	candidates[0] = xstrdup( name );
-	candidates[1] = fmt( "%s.exe", name );
-	for ( i = 0; i < 2; i++ ) {
-		if ( folder ) {
-			char *path = path_join( folder, candidates[i] );
-
-			/* q3lcc finds q3cpp and q3rcc from its own name, which has to be written with one kind of slash */
-			if ( is_file( path ) ) {
-				return abs_path( path );
-			}
-		} else {
-			char *path = find_in_path( candidates[i] );
-
-			if ( path ) {
-				return path;
-			}
-		}
-	}
-	if ( folder ) {
-		die( "%s not found in %s", name, folder );
-	}
-	die( "%s not found; give the folder of the tools with --tools or ODF_TOOLS", name );
-	return NULL;
-}
-
-/* the folders of the SDK: sdk/ (libc/, odf_lib.c ...) and include/ */
-static void find_sdk( const char *given, const char *argv0, char **sdk_dir, char **include_dir )
-{
-	char *root;
-
-	if ( given && given[0] ) {
-		root = abs_path( given );
-		*sdk_dir = path_join( root, "sdk" );
-		*include_dir = path_join( root, "include" );
-	} else {
-		char *here = exe_folder( argv0 );
-		char *source_include;
-
-		if ( !here ) {
-			die( "cannot find the SDK; give its folder with --sdk or ODF_SDK" );
-		}
-		/* the program built in the sources (code/plugin_api/sdk), or put in the folder that has include/ and sdk/ */
-		source_include = abs_path( path_join( here, "../include" ) );
-		if ( is_file( path_join( here, "odf_lib.c" ) ) && is_file( path_join( source_include, "odf_common.h" ) ) ) {
-			*sdk_dir = here;
-			*include_dir = source_include;
-		} else {
-			*sdk_dir = path_join( here, "sdk" );
-			*include_dir = path_join( here, "include" );
-		}
-	}
-	if ( !is_file( path_join( *sdk_dir, "odf_lib.c" ) ) || !is_file( path_join( *include_dir, "odf_common.h" ) ) ) {
-		die( "the SDK is not in %s and %s; give its folder with --sdk or ODF_SDK", *sdk_dir, *include_dir );
-	}
-}
-
-/* copies of the include folders in a new folder inside 'folder'; returns the folder with the copies in 0, 1 ... */
-static char *stage_includes( char **include_dirs, int count, const char *folder )
-{
-	char *stage = make_temp_dir( folder, ".odfsdk" );
-	int i;
-
-	for ( i = 0; i < count; i++ ) {
-		char *copy = fmt( "%s%c%d", stage, PATH_SEP, i );
-
-		if ( is_dir( include_dirs[i] ) ) {
-			copy_tree( include_dirs[i], copy, stage, 0 );
-		} else {
-			make_dirs( copy );
-		}
-	}
-	return stage;
-}
 
 /* the value of an option: -Ifolder or -I folder */
 static const char *short_value( int argc, char **argv, int *i, const char *name )
@@ -1251,16 +1098,40 @@ static const char *long_value( int argc, char **argv, int *i, const char *name )
 	return NULL;
 }
 
+/* the tools understand / in the paths on every system, and the preprocessor knows nothing else */
+static char *with_slashes( char *path )
+{
+	char *p;
+
+	for ( p = path; *p; p++ ) {
+		if ( *p == '\\' ) {
+			*p = '/';
+		}
+	}
+	return path;
+}
+
 int main( int argc, char **argv )
 {
 	int module = -1, no_lib = 0, i, n, num_includes = 0, num_defines = 0, num_sources = 0;
-	const char *output = NULL, *tools = getenv( "ODF_TOOLS" ), *sdk = getenv( "ODF_SDK" ), *syscalls_arg = NULL, *map = NULL, *v;
+	const char *output = NULL, *sdk = getenv( "ODF_SDK" ), *syscalls_arg = NULL, *map = NULL, *v;
 	const char *inputs[MAX_LIST], *define_list[MAX_LIST], *include_arg[MAX_LIST];
 	char *include_dirs[MAX_LIST + 3], *sources[MAX_LIST + 1];
-	char *lcc, *asm_tool, *syscalls, *sdk_dir, *include_root, *work, *out, *objects[MAX_LIST + 1];
-	char *staged_folders[8], *staged_keys[8];
-	int num_staged = 0;
+	char *self, *syscalls, *sdk_dir, *include_root, *work, *out, *objects[MAX_LIST + 1];
 	size_t size;
+
+	if ( argc >= 3 && !strcmp( argv[1], "--run-tool" ) ) {
+		if ( !strcmp( argv[2], "cpp" ) ) {
+			return cpp_main( argc - 2, argv + 2 );
+		}
+		if ( !strcmp( argv[2], "rcc" ) ) {
+			return rcc_main( argc - 2, argv + 2 );
+		}
+		if ( !strcmp( argv[2], "asm" ) ) {
+			return asm_main( argc - 2, argv + 2 );
+		}
+		die( "no tool %s", argv[2] );
+	}
 
 	atexit( cleanup );
 	if ( argc < 2 ) {
@@ -1296,8 +1167,6 @@ int main( int argc, char **argv )
 				die( "too many -D" );
 			}
 			define_list[num_defines++] = short_value( argc, argv, &i, "-D" );
-		} else if ( ( v = long_value( argc, argv, &i, "--tools" ) ) != NULL ) {
-			tools = v;
 		} else if ( ( v = long_value( argc, argv, &i, "--sdk" ) ) != NULL ) {
 			sdk = v;
 		} else if ( ( v = long_value( argc, argv, &i, "--syscalls" ) ) != NULL ) {
@@ -1324,27 +1193,51 @@ int main( int argc, char **argv )
 	if ( num_sources == 0 ) {
 		die( "no source files" );
 	}
-	if ( tools && !tools[0] ) {
-		tools = NULL;
+
+	self = exe_path( argv[0] );
+	out = abs_path( output );
+	make_dirs( path_dirname( out ) );
+	/* the temporary folder of the system, and when that is not usable (TEMP is not set ...) the folder of the plugin */
+	work = try_temp_dir( system_temp_dir(), "odfbuild" );
+	if ( !work ) {
+		work = make_temp_dir( path_dirname( out ), ".odfbuild" );
 	}
 
-	lcc = find_tool( "q3lcc", tools );
-	asm_tool = find_tool( "q3asm", tools );
-	find_sdk( sdk, argv[0], &sdk_dir, &include_root );
+	/* the files of the SDK: the ones in this program, or the ones in the folder given */
+	if ( sdk && sdk[0] ) {
+		char *root = abs_path( sdk );
+
+		sdk_dir = path_join( root, "sdk" );
+		include_root = path_join( root, "include" );
+		if ( !is_file( path_join( sdk_dir, "odf_lib.c" ) ) || !is_file( path_join( include_root, "odf_common.h" ) ) ) {
+			die( "the SDK is not in %s and %s; --sdk and ODF_SDK name the folder code/plugin_api", sdk_dir, include_root );
+		}
+	} else {
+		char *files = path_join( work, "sdk" );
+
+		for ( i = 0; i < odf_num_embedded; i++ ) {
+			char *path = path_join( files, odf_embedded[i].path );
+
+			make_dirs( path_dirname( path ) );
+			write_file( path, (const char *)odf_embedded[i].data, odf_embedded[i].size );
+		}
+		sdk_dir = path_join( files, "sdk" );
+		include_root = path_join( files, "include" );
+	}
 	syscalls = abs_path( syscalls_arg ? syscalls_arg : fmt( "%s%c%s_syscalls.asm", include_root, PATH_SEP, modules[module].prefix ) );
 	if ( !is_file( syscalls ) ) {
 		die( "%s not found", syscalls );
 	}
 
-	/* the preprocessor of q3lcc takes include folders relative to the folder of the source file and cannot use complete
-	   paths, so every file is compiled from its own folder with the include folders written relative to it */
+	/* the preprocessor takes the include folders as they are written and the file from the folder it is in, so every file is
+	   compiled from its own folder */
 	n = 0;
 	for ( i = 0; i < num_includes; i++ ) {
-		include_dirs[n++] = abs_path( include_arg[i] );
+		include_dirs[n++] = with_slashes( abs_path( include_arg[i] ) );
 	}
-	include_dirs[n++] = path_join( sdk_dir, "libc" );
-	include_dirs[n++] = sdk_dir;
-	include_dirs[n++] = include_root;
+	include_dirs[n++] = with_slashes( path_join( sdk_dir, "libc" ) );
+	include_dirs[n++] = with_slashes( xstrdup( sdk_dir ) );
+	include_dirs[n++] = with_slashes( xstrdup( include_root ) );
 	for ( i = 0; i < num_sources; i++ ) {
 		sources[i] = abs_path( inputs[i] );
 	}
@@ -1357,110 +1250,81 @@ int main( int argc, char **argv )
 		}
 	}
 
-	out = abs_path( output );
-	make_dirs( path_dirname( out ) );
-	/* the temporary folder of the system, and when that is not usable (TEMP is not set ...) the folder of the plugin */
-	work = try_temp_dir( system_temp_dir(), "odfbuild" );
-	if ( !work ) {
-		work = make_temp_dir( path_dirname( out ), ".odfbuild" );
-	}
-
 	for ( i = 0; i < num_sources; i++ ) {
 		char *folder = path_dirname( sources[i] ), *base = xstrdup( path_basename( sources[i] ) );
-		char *rel[MAX_LIST + 3], *args[MAX_LIST * 2 + 16], *obj, *stem;
-		int k, na = 0, bad = 0, m;
+		char *args[MAX_LIST * 2 + 24], *pre, *obj, *stem;
+		int k, na = 0;
 
-		for ( k = 0; k < n; k++ ) {
-			rel[k] = rel_path( include_dirs[k], folder );
-			if ( !rel[k] ) {
-				bad = 1;
-			}
-		}
-		if ( bad ) {
-			/* another drive (Windows): the preprocessor cannot reach the include folders, so copies of them are put next
-			   to the source for the time of the build */
-			char key[3] = { 0 };
-			char *stage = NULL;
-
-			key[0] = (char)( folder[0] >= 'A' && folder[0] <= 'Z' ? folder[0] + 32 : folder[0] );
-			key[1] = folder[1];
-			for ( m = 0; m < num_staged; m++ ) {
-				if ( !strcmp( staged_keys[m], key ) ) {
-					stage = staged_folders[m];
-				}
-			}
-			if ( !stage ) {
-				if ( num_staged == 8 ) {
-					die( "too many drives" );
-				}
-				stage = stage_includes( include_dirs, n, folder );
-				staged_keys[num_staged] = xstrdup( key );
-				staged_folders[num_staged++] = stage;
-			}
-			for ( k = 0; k < n; k++ ) {
-				rel[k] = rel_path( fmt( "%s%c%d", stage, PATH_SEP, k ), folder );
-			}
-		}
 		stem = xstrdup( base );
 		if ( strrchr( stem, '.' ) && strrchr( stem, '.' ) != stem ) {
 			*strrchr( stem, '.' ) = '\0';
 		}
+		pre = fmt( "%s%c%d_%s.i", work, PATH_SEP, i, stem );
 		obj = fmt( "%s%c%d_%s.asm", work, PATH_SEP, i, stem );
 
-		args[na++] = lcc;
-		args[na++] = "-S";
-		args[na++] = "-N";
+		/* the preprocessor */
+		args[na++] = self;
+		args[na++] = "--run-tool";
+		args[na++] = "cpp";
+		args[na++] = "-D__STDC__=1";
+		args[na++] = "-D__STRICT_ANSI__";
+		args[na++] = "-D__signed__=signed";
+		args[na++] = "-DQ3_VM";
+		args[na++] = "-D__LCC__";
 		args[na++] = "-DQ3_VM";
 		args[na++] = fmt( "-D%s", modules[module].symbol );
 		for ( k = 0; k < num_defines; k++ ) {
 			args[na++] = fmt( "-D%s", define_list[k] );
 		}
 		for ( k = 0; k < n; k++ ) {
-			args[na++] = fmt( "-I%s", rel[k] );
+			args[na++] = fmt( "-I%s", include_dirs[k] );
 		}
-		args[na++] = "-o";
-		args[na++] = obj;
 		args[na++] = base;
+		args[na++] = pre;
 		args[na] = NULL;
-		run( args, folder );
+		run( args, folder, "the preprocessor" );
+
+		/* the compiler */
+		na = 0;
+		args[na++] = self;
+		args[na++] = "--run-tool";
+		args[na++] = "rcc";
+		args[na++] = "-target=bytecode";
+		args[na++] = pre;
+		args[na++] = obj;
+		args[na] = NULL;
+		run( args, folder, "the compiler" );
+		remove_tree( pre );
+
 		fix_assembly( obj );
 		objects[i] = obj;
 	}
 
-	/* q3asm writes a map file next to the program, so it works in the temporary folder */
+	/* the assembler writes a map file next to the program, so it works in the temporary folder */
 	{
 		char *args[MAX_LIST + 16];
 		int na = 0;
-		char *p;
 
-		args[na++] = asm_tool;
+		args[na++] = self;
+		args[na++] = "--run-tool";
+		args[na++] = "asm";
 		if ( map ) {
 			args[na++] = "-m";
 		}
 		args[na++] = "-o";
 		args[na++] = "plugin";
 		for ( i = 0; i < num_sources; i++ ) {
-			for ( p = objects[i]; *p; p++ ) {
-				if ( *p == '\\' ) {
-					*p = '/';
-				}
-			}
-			args[na++] = objects[i];
+			args[na++] = with_slashes( objects[i] );
 		}
-		for ( p = syscalls; *p; p++ ) {
-			if ( *p == '\\' ) {
-				*p = '/';
-			}
-		}
-		args[na++] = syscalls;
+		args[na++] = with_slashes( syscalls );
 		args[na] = NULL;
-		run( args, work );
+		run( args, work, "the assembler" );
 	}
 	{
 		char *qvm = path_join( work, "plugin.qvm" ), *mapfile = path_join( work, "plugin.map" );
 
 		if ( !is_file( qvm ) ) {
-			die( "q3asm did not write the plugin" );
+			die( "the assembler did not write the plugin" );
 		}
 		copy_file( qvm, out );
 		if ( map && is_file( mapfile ) ) {

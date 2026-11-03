@@ -1,0 +1,194 @@
+name: odf-build
+
+# Builds odf-build (code/plugin_api/sdk), the program plugin authors use to build plugins, for every system, and checks it.
+# The binaries are artifacts of the run. When an engine release is published, they are also attached to it as
+# odf-build-<system>.zip (the updater of the engine downloads its files by name, so more files on a release do no harm).
+
+on:
+  pull_request:
+    paths:
+      - 'code/plugin_api/**'
+      - 'tests/plugin_sdk/**'
+      - 'tests/client_plugin/**'
+      - '.github/workflows/odf-build.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'code/plugin_api/**'
+      - 'tests/plugin_sdk/**'
+      - 'tests/client_plugin/**'
+      - '.github/workflows/odf-build.yml'
+  release:
+    types: [published]
+
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: odf-build Windows x86_64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: base-devel mingw-w64-x86_64-gcc
+        path-type: minimal
+        release: false
+        update: false
+        cache: false
+
+    - uses: actions/checkout@v7
+
+    - name: Build
+      run: make -C code/plugin_api/sdk OUT="$PWD/out" CC=gcc LDFLAGS=-static
+
+    - name: Check
+      run: sh code/plugin_api/sdk/check.sh out/odf-build.exe out/check
+
+    - name: Pack
+      run: |
+        d=dist/odf-build-windows-x86_64
+        mkdir -p $d
+        cp out/odf-build.exe $d/
+        cp code/plugin_api/toolchain/lcc/COPYRIGHT $d/COPYRIGHT-lcc.txt
+        cp COPYING.txt code/plugin_api/sdk/README.md $d/
+        cp -r code/plugin_api/sdk/examples $d/
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: odf-build-windows-x86_64
+        path: dist
+        if-no-files-found: error
+        retention-days: 14
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: check-windows-x86_64
+        path: out/check/sha256.txt
+        if-no-files-found: error
+        retention-days: 5
+
+  unix:
+    name: odf-build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            id: linux-x86_64
+            ldflags: -static
+          - name: Linux arm64
+            runner: ubuntu-22.04-arm
+            id: linux-arm64
+            ldflags: -static
+          - name: macOS arm64
+            runner: macos-14
+            id: macos-arm64
+            ldflags: ''
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Build
+      run: make -C code/plugin_api/sdk OUT="$PWD/out" LDFLAGS="${{ matrix.ldflags }}"
+
+    - name: Check
+      run: sh code/plugin_api/sdk/check.sh out/odf-build out/check
+
+    - name: Pack
+      run: |
+        d=dist/odf-build-${{ matrix.id }}
+        mkdir -p $d
+        cp out/odf-build $d/
+        cp code/plugin_api/toolchain/lcc/COPYRIGHT $d/COPYRIGHT-lcc.txt
+        cp COPYING.txt code/plugin_api/sdk/README.md $d/
+        cp -r code/plugin_api/sdk/examples $d/
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: odf-build-${{ matrix.id }}
+        path: dist
+        if-no-files-found: error
+        retention-days: 14
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: check-${{ matrix.id }}
+        path: out/check/sha256.txt
+        if-no-files-found: error
+        retention-days: 5
+
+  # the C library of the SDK and the command helper, run in the plugin VM of the engine (compiled and interpreted)
+  engine-tests:
+    name: Plugin tests (Linux)
+    runs-on: ubuntu-24.04
+    env:
+      PYTHON: python3
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: SDK library in the VM
+      run: sh tests/plugin_sdk/run.sh
+
+    - name: Command helper in the client host
+      run: sh tests/client_plugin/cmd_test.sh
+
+  # the same programs have to give the same plugin files on all systems
+  same-everywhere:
+    name: Same plugins on all systems
+    needs: [windows, unix]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        pattern: check-*
+        path: checks
+
+    - name: Compare
+      run: |
+        for f in checks/*/sha256.txt; do echo "== $f"; cat $f; done
+        u=$(md5sum checks/*/sha256.txt | cut -d' ' -f1 | sort -u | wc -l)
+        if [ "$u" != 1 ]; then echo "the plugins differ between systems"; exit 1; fi
+
+  # attaches the compiler to the release that was published
+  release-assets:
+    name: Attach odf-build to the release
+    if: ${{ github.event_name == 'release' }}
+    needs: [windows, unix, engine-tests, same-everywhere]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    strategy:
+      matrix:
+        id: [windows-x86_64, linux-x86_64, linux-arm64, macos-arm64]
+
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: odf-build-${{ matrix.id }}
+        path: pack
+
+    - name: Make the archive
+      run: |
+        # the artifacts do not keep the executable bit
+        chmod +x pack/odf-build-${{ matrix.id }}/odf-build* || true
+        cd pack
+        zip -r ../odf-build-${{ matrix.id }}.zip odf-build-${{ matrix.id }}
+
+    - name: Upload to the release
+      uses: svenstaro/upload-release-action@latest
+      with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        tag: ${{ github.ref }}
+        overwrite: true
+        file: odf-build-${{ matrix.id }}.zip
