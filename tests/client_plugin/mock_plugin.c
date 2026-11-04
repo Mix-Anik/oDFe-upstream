@@ -123,6 +123,18 @@ int OnInit( void )
 	CvarRegister( PFX "_float", "0", 0 );
 	CvarRegister( PFX "_visible", "no", 0 );
 	CvarRegister( PFX "_secret", "open", 0 );		// is the engine's private cvar now: it must stay out of reach
+#ifdef REFUSE
+	// the wrong way round: no flag for a shared cvar, the flag for one that its first plugin did not share. Both are refused
+	CvarRegister( "shared_view", "7", ODFC_CVAR_ARCHIVE );
+	CvarRegister( "plain_view", "7", ODFC_CVAR_ARCHIVE | ODFC_CVAR_SHARED );
+#else
+	CvarRegister( "shared_view", "7", ODFC_CVAR_ARCHIVE | ODFC_CVAR_SHARED );
+	CvarRegister( "plain_view", "7", ODFC_CVAR_ARCHIVE );
+#endif
+	CvarString( "shared_view", buf, sizeof( buf ) );
+	Copy( st.sharedSeen, buf, sizeof( st.sharedSeen ) );
+	CvarString( "plain_view", buf, sizeof( buf ) );
+	Copy( st.plainSeen, buf, sizeof( st.plainSeen ) );
 	st.cvarValue = CvarValue( PFX "_float" );
 	CvarString( PFX "_secret", buf, sizeof( buf ) );
 	Copy( st.secretSeen, buf, sizeof( st.secretSeen ) );

@@ -186,7 +186,8 @@ typedef struct {
 // cvar flags for CvarRegister
 enum {
 	ODFC_CVAR_ARCHIVE = 1,		// saved to the config file
-	ODFC_CVAR_ROM = 2			// shows a value (the default given) that cannot be changed (version 4)
+	ODFC_CVAR_ROM = 2,			// shows a value (the default given) that cannot be changed (version 4)
+	ODFC_CVAR_SHARED = 4		// other plugins may register the cvar too, if they give this flag as well: they all read the one value
 };
 
 // Draw2D phases

@@ -18,6 +18,8 @@ typedef struct {
 	char			visibleSeen[64];
 	char			notOwnedSeen[64];	// a cvar of the game that is not on the list of readable ones
 	char			readableSeen[64];	// one that is
+	char			sharedSeen[64];		// CvarString of "shared_view", registered by every mock with ODFC_CVAR_SHARED
+	char			plainSeen[64];		// the same for "plain_view", registered without the flag: only the first mock gets it
 	int				cvarReserved;		// 1 when the engine let the mock create a reserved name
 
 	int				mapLoads;

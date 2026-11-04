@@ -17,7 +17,7 @@ the sandbox in plugin_vm.c). A plugin has no files, no network and no way to tou
 #define MAX_PLUGIN_NAME		256
 #define DISABLED_FILE		"disabled"		// in the plugins folder: the names of the plugins that are switched off
 #define MAX_POLY_VERTS		64
-#define MAX_PLUGIN_CVARS	64
+#define MAX_PLUGIN_CVARS	256
 #define MAX_CVAR_NAME		48
 #define MAX_MODULE_FILE		( 8 * 1024 * 1024 )
 
@@ -231,6 +231,23 @@ static qboolean Plugin_OwnsCvar( const plugin_t *p, const char *name )
 	return qfalse;
 }
 
+// The cvars a plugin created with ODFC_CVAR_SHARED. Another plugin may register such a cvar too, if it gives the flag as well;
+// every other cvar belongs to the one plugin that created it.
+static char				sharedCvars[MAX_PLUGIN_CVARS][MAX_CVAR_NAME];
+static int				numSharedCvars;
+
+static qboolean Cvar_IsShared( const char *name )
+{
+	int i;
+
+	for ( i = 0; i < numSharedCvars; i++ ) {
+		if ( !Q_stricmp( sharedCvars[i], name ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 static void Imp_CvarRegister( const char *name, const char *defaultValue, int flags )
 {
 	unsigned existing;
@@ -244,14 +261,18 @@ static void Imp_CvarRegister( const char *name, const char *defaultValue, int fl
 	if ( !Plugin_OwnsCvar( current, name ) ) {
 		// a value the player set in a config before the plugin started is fine, a cvar of anyone else is not
 		existing = Cvar_Flags( name );
-		if ( existing != CVAR_NONEXISTENT && !( existing & CVAR_USER_CREATED ) ) {
+		if ( existing != CVAR_NONEXISTENT && !( existing & CVAR_USER_CREATED ) && !( ( flags & ODFC_CVAR_SHARED ) && Cvar_IsShared( name ) ) ) {
 			Com_Printf( S_COLOR_YELLOW "Plugin '%s': the cvar %s already exists\n", current->name, name );
 			return;
 		}
 		if ( current->numCvars >= MAX_PLUGIN_CVARS ) {
+			Com_Printf( S_COLOR_YELLOW "Plugin '%s': too many cvars, %s is not created\n", current->name, name );
 			return;
 		}
 		Q_strncpyz( current->cvars[current->numCvars++], name, MAX_CVAR_NAME );
+	}
+	if ( ( flags & ODFC_CVAR_SHARED ) && !Cvar_IsShared( name ) && numSharedCvars < MAX_PLUGIN_CVARS ) {
+		Q_strncpyz( sharedCvars[numSharedCvars++], name, MAX_CVAR_NAME );
 	}
 	if ( flags & ODFC_CVAR_ROM ) {
 		Cvar_Get( name, defaultValue, CVAR_ROM );		// a ROM cvar always has the value given

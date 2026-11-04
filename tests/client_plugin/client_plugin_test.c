@@ -244,6 +244,11 @@ static void TestLoading( void )
 	CHECK( !mock->cvarReserved, "a plugin created a cvar with a name of the game" );
 	CHECK( FindPrint( "cannot create the cvar cg_mock_evil" ) >= 0, "the refusal was not reported" );
 	CHECK( FindPrint( "the cvar mock_secret already exists" ) >= 0, "a private cvar was taken over" );
+	// plain_view is registered by every mock without ODFC_CVAR_SHARED, shared_view with it; mock is the first to start
+	CHECK( !strcmp( mock->plainSeen, "7" ) && !strcmp( mock->sharedSeen, "7" ), "the first plugin reads what it made: '%s' '%s'", mock->plainSeen, mock->sharedSeen );
+	CHECK( FindPrint( "Plugin 'refuse': the cvar plain_view already exists" ) >= 0, "a cvar of another plugin without the shared flag was taken over" );
+	CHECK( FindPrint( "Plugin 'refuse': the cvar shared_view already exists" ) >= 0, "a shared cvar was joined without the flag" );
+	CHECK( FindPrint( "Plugin 'mock': the cvar shared_view already exists" ) < 0, "a shared cvar was refused" );
 
 	CHECK( mock->initCalls == 1, "Init calls %d", mock->initCalls );
 	CHECK( mock->cvarDefault == 5, "a registered cvar has its default, got %d", mock->cvarDefault );
@@ -826,6 +831,8 @@ static void TestDisabledFile( void )
 		remove( path );
 		CL_Plugins_Init();
 		CHECK( StateOf( "mock" ) == 0 && StateOf( "second" ) == 0, "without the file everything starts" );
+		// every mock registers shared_view with the shared flag: both read it
+		CHECK( !strcmp( mock->sharedSeen, "7" ) && !strcmp( oldMock->sharedSeen, "7" ), "a shared cvar must be readable by both: '%s' '%s'", mock->sharedSeen, oldMock->sharedSeen );
 		CL_Plugins_Shutdown();
 		CHECK( !FileExists( "disabled" ), "the file was made without a reason" );
 	}
