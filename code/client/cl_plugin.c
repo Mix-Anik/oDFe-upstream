@@ -611,10 +611,13 @@ static void Imp_DrawModel( float x, float y, float w, float h, int model, const 
 
 #define MAX_PLUGIN_COMMANDS		256
 #define MAX_COMMAND_NAME		32
+#define COMMAND_MAX_ARGS		16		// what a handler gets (see CommandHandler in client.api)
+#define COMMAND_MAX_ARG_LEN		200
 
 typedef struct {
 	char		name[MAX_COMMAND_NAME];
 	plugin_t	*plugin;
+	int			handler;		// the function of the plugin that runs it
 } pluginCommand_t;
 
 static pluginCommand_t	pluginCommands[MAX_PLUGIN_COMMANDS];
@@ -648,18 +651,32 @@ static void Plugins_Command_f( void )
 		if ( !Q_stricmp( Cmd_Argv( 0 ), c->name ) ) {
 			plugin_t *p = c->plugin;
 
-			if ( p->state != PS_RUNNING || !PLUGIN_HAS( p, OnCommand ) ) {
+			if ( p->state != PS_RUNNING || !PLUGIN_HAS( p, CommandHandler ) ) {
 				return;
 			}
-			PLUGIN_RUN( p, "OnCommand", ODFC_Call_OnCommand( p->vm, c->name ) );
+			{
+				// the words of the command line, like main( argc, argv ); more than fit in the io buffer are cut
+				char words[COMMAND_MAX_ARGS][COMMAND_MAX_ARG_LEN];
+				const char *argv[COMMAND_MAX_ARGS];
+				int k, argc = Cmd_Argc();
+
+				if ( argc > COMMAND_MAX_ARGS ) {
+					argc = COMMAND_MAX_ARGS;
+				}
+				for ( k = 0; k < argc; k++ ) {
+					Q_strncpyz( words[k], Cmd_Argv( k ), sizeof( words[k] ) );
+					argv[k] = words[k];
+				}
+				PLUGIN_RUN( p, "command", ODFC_Call_CommandHandler( p->vm, c->handler, argc, argv ) );
+			}
 			return;
 		}
 	}
 }
 
-static int Imp_CommandRegister( const char *name )
+static int Imp_CommandRegister( const char *name, int handler )
 {
-	if ( !current || !name || !ValidCommandName( name ) || numPluginCommands >= MAX_PLUGIN_COMMANDS ) {
+	if ( !current || !name || handler == 0 || !ValidCommandName( name ) || numPluginCommands >= MAX_PLUGIN_COMMANDS ) {
 		return 0;
 	}
 	// the engine's own commands (and those of other plugins) cannot be taken over
@@ -669,26 +686,10 @@ static int Imp_CommandRegister( const char *name )
 	}
 	Q_strncpyz( pluginCommands[numPluginCommands].name, name, MAX_COMMAND_NAME );
 	pluginCommands[numPluginCommands].plugin = current;
+	pluginCommands[numPluginCommands].handler = handler;
 	numPluginCommands++;
 	Cmd_AddCommand( name, Plugins_Command_f );
 	return 1;
-}
-
-static int Imp_CommandArgc( void )
-{
-	return Cmd_Argc();
-}
-
-static void Imp_CommandArgv( int n, char *out, int outSize )
-{
-	if ( !out || outSize < 1 ) {
-		return;
-	}
-	if ( n < 0 || n >= Cmd_Argc() ) {
-		out[0] = '\0';
-		return;
-	}
-	Cmd_ArgvBuffer( n, out, outSize );
 }
 
 

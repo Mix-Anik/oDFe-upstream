@@ -17,7 +17,7 @@ It records what the engine hands it, and tries the drawing calls in phases where
 #define ODF_PLUGIN_VERSION "mock 1.0"
 #endif
 
-#define EXPORTS( X ) X(OnInit) X(OnShutdown) X(OnMapLoad) X(OnCgameShutdown) X(OnDraw3D) X(OnDraw2D) X(OnCommand) X(OnFilterSound)
+#define EXPORTS( X ) X(OnInit) X(OnShutdown) X(OnMapLoad) X(OnCgameShutdown) X(OnDraw3D) X(OnDraw2D) X(OnFilterSound)
 
 // the entry point has to come first
 #include "odfc_entry.h"
@@ -66,16 +66,19 @@ static void TryDrawing3D( void )
 
 static const float modelOrigin[3] = { 70, 0, 0 }, modelAngles[3] = { 0, 90, 0 };
 
-void OnCommand( const char *name )
+static void MockCommand( int argc, const char **argv )
 {
-	char buf[32];
+	int n = 0;
 
 	Begin();
 	st.commandCalls++;
-	Copy( st.commandName, name, sizeof( st.commandName ) );
-	st.commandArgc = CommandArgc();
-	CommandArgv( 1, buf, sizeof( buf ) );
-	Copy( st.commandArg1, buf, sizeof( st.commandArg1 ) );
+	Copy( st.commandName, argv[0], sizeof( st.commandName ) );
+	st.commandArgc = argc;
+	Copy( st.commandArg1, argc > 1 ? argv[1] : "", sizeof( st.commandArg1 ) );
+	while ( argc > 1 && argv[1][n] ) {
+		n++;
+	}
+	st.commandArg1Len = n;
 	if ( st.loopInCommand ) {
 		volatile int spin = 0;
 
@@ -107,10 +110,11 @@ int OnInit( void )
 
 	Begin();
 	CvarRegister( PFX "_rom", "fixed", ODFC_CVAR_ROM );
-	st.cmdRegistered = CommandRegister( PFX "_cmd" );
-	st.cmdBadName = CommandRegister( "Bad Name" );
-	st.cmdTaken = CommandRegister( "quit" );
-	st.cmdSecond = CommandRegister( PFX "_cmd" );
+	st.cmdRegistered = CommandRegister( PFX "_cmd", MockCommand );
+	st.cmdBadName = CommandRegister( "Bad Name", MockCommand );
+	st.cmdTaken = CommandRegister( "quit", MockCommand );
+	st.cmdSecond = CommandRegister( PFX "_cmd", MockCommand );
+	st.cmdNoHandler = CommandRegister( PFX "_nohandler", 0 );
 
 	st.initCalls++;
 	CvarRegister( PFX "_setting", "5", ODFC_CVAR_ARCHIVE );

@@ -9,7 +9,7 @@
 static const char *const odfc_capNames[] = { "world", "draw", "command", "sound" };
 #define ODFC_NUM_CAPS	4
 
-#define ODFC_NUM_IMPORTS	30
+#define ODFC_NUM_IMPORTS	28
 
 // The functions the engine implements, written by hand. The host also has to define
 //   static qboolean ODF_CheatsAllowed( void );   the rule for the functions marked cheat
@@ -40,9 +40,7 @@ static void Imp_AddBeam( int shader, const float *from, const float *to, const u
 static void Imp_SetColor( const float *rgba );
 static void Imp_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, int shader );
 static void Imp_DrawModel( float x, float y, float w, float h, int model, const float *origin, const float *angles, int time );
-static int Imp_CommandRegister( const char *name );
-static int Imp_CommandArgc( void );
-static void Imp_CommandArgv( int n, char *out, int outSize );
+static int Imp_CommandRegister( const char *name, int handler );
 
 static ID_INLINE float Odf_ArgFloat( intptr_t arg )
 {
@@ -311,30 +309,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			}
 			const char * p_name = NULL;
 			PluginVM_String( vm, args[1], qfalse, &p_name );
-			return Imp_CommandRegister( p_name );
-		}
-		case 28: {		// CommandArgc
-			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_command ) ) {
-				PluginVM_Denied( vm, "CommandArgc", "command" );
-				return 0;
-			}
-			return Imp_CommandArgc(  );
-		}
-		case 29: {		// CommandArgv
-			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_command ) ) {
-				PluginVM_Denied( vm, "CommandArgv", "command" );
-				return 0;
-			}
-			char * p_out = NULL;
-			if ( (uint32_t)args[3] > 1048576 ) {
-				PluginVM_Trap( vm, "bad size passed to the engine" );
-				return 0;
-			}
-			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_out );
-			}
-			Imp_CommandArgv( (int)args[1], p_out, (int)args[3] );
-			return 0;
+			return Imp_CommandRegister( p_name, (int)args[2] );
 		}
 		default:
 			PluginVM_Trap( vm, "called a function the engine does not have" );
@@ -349,14 +324,14 @@ enum {
 	ODFC_EXP_OnCgameShutdown,
 	ODFC_EXP_OnDraw3D,
 	ODFC_EXP_OnDraw2D,
-	ODFC_EXP_OnCommand,
 	ODFC_EXP_OnFilterSound,
 	ODFC_EXP_OnDemoSeek,
+	ODFC_EXP_CommandHandler,
 	ODFC_NUM_EXPORTS
 };
-static const char *const odfc_exportNames[] = { "OnInit", "OnShutdown", "OnMapLoad", "OnCgameShutdown", "OnDraw3D", "OnDraw2D", "OnCommand", "OnFilterSound", "OnDemoSeek" };
+static const char *const odfc_exportNames[] = { "OnInit", "OnShutdown", "OnMapLoad", "OnCgameShutdown", "OnDraw3D", "OnDraw2D", "OnFilterSound", "OnDemoSeek", "CommandHandler" };
 // capability an export needs to be called (0 = none)
-static const unsigned odfc_exportCaps[] = { 0, 0, 0, 0, 0, 0, 0, ODFC_CAP_sound, 0 };
+static const unsigned odfc_exportCaps[] = { 0, 0, 0, 0, 0, 0, ODFC_CAP_sound, 0, 0 };
 
 static qboolean ODFC_Call_OnInit( pluginVM_t *w, int *result )
 {
@@ -445,24 +420,6 @@ static qboolean ODFC_Call_OnDraw2D( pluginVM_t *w, int a_phase )
 	return PluginVM_Call( w, ODFC_EXP_OnDraw2D, args, 1, NULL, PLUGIN_VM_BUDGET_FRAME );
 }
 
-static qboolean ODFC_Call_OnCommand( pluginVM_t *w, const char *a_name )
-{
-	int args[8];
-	unsigned o;
-	(void)o;
-	if ( !PluginVM_Has( w, ODFC_EXP_OnCommand ) ) {
-		return qtrue;
-	}
-	PluginVM_IOBegin( w );
-	o = PluginVM_IOPutString( w, a_name );
-	if ( !o ) {
-		PluginVM_Fail( w, "the arguments of OnCommand do not fit the io buffer" );
-		return qfalse;
-	}
-	args[0] = (int)o;
-	return PluginVM_Call( w, ODFC_EXP_OnCommand, args, 1, NULL, PLUGIN_VM_BUDGET_FRAME );
-}
-
 static qboolean ODFC_Call_OnFilterSound( pluginVM_t *w, int a_entityNum, int a_isLoop, int a_entityClientNum, int a_ownClientNum, int *result )
 {
 	int args[8];
@@ -498,4 +455,43 @@ static qboolean ODFC_Call_OnDemoSeek( pluginVM_t *w, int a_fromTime, int a_toTim
 	o = (unsigned)a_toTime;
 	args[1] = (int)o;
 	return PluginVM_Call( w, ODFC_EXP_OnDemoSeek, args, 2, NULL, PLUGIN_VM_BUDGET_FRAME );
+}
+
+static qboolean ODFC_Call_CommandHandler( pluginVM_t *w, int a_handler, int a_argc, const char *const *a_argv )
+{
+	int args[8];
+	unsigned o;
+	(void)o;
+	if ( !PluginVM_Has( w, ODFC_EXP_CommandHandler ) ) {
+		return qtrue;
+	}
+	if ( a_argc > 16 ) {
+		a_argc = 16;		// the most strings that are handed over
+	}
+	if ( a_argc < 0 ) {
+		a_argc = 0;
+	}
+	PluginVM_IOBegin( w );
+	o = (unsigned)a_handler;
+	args[0] = (int)o;
+	o = (unsigned)a_argc;
+	args[1] = (int)o;
+	{
+		unsigned offsets[16];
+		int k;
+		for ( k = 0; k < a_argc; k++ ) {
+			offsets[k] = PluginVM_IOPutString( w, a_argv[k] );
+			if ( !offsets[k] ) {
+				PluginVM_Fail( w, "the arguments of CommandHandler do not fit the io buffer" );
+				return qfalse;
+			}
+		}
+		o = PluginVM_IOPut( w, offsets, sizeof( offsets[0] ) * ( a_argc ? a_argc : 1 ), 4 );
+	}
+	if ( !o ) {
+		PluginVM_Fail( w, "the arguments of CommandHandler do not fit the io buffer" );
+		return qfalse;
+	}
+	args[2] = (int)o;
+	return PluginVM_Call( w, ODFC_EXP_CommandHandler, args, 3, NULL, PLUGIN_VM_BUDGET_FRAME );
 }

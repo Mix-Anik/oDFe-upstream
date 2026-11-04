@@ -110,6 +110,8 @@ static int ListedState( const char *name, int field, char *text, int size )
 	return -1;
 }
 
+static int CommandRegistered( const char *name );
+
 static int StateOf( const char *name )
 {
 	char text[256];
@@ -576,6 +578,7 @@ static void TestV4( void )
 	CHECK( mock->cmdBadName == 0, "a bad command name was accepted" );
 	CHECK( mock->cmdTaken == 0, "an engine command was taken over" );
 	CHECK( mock->cmdSecond == 0, "a command was registered twice" );
+	CHECK( mock->cmdNoHandler == 0 && !CommandRegistered( "mock_nohandler" ), "a command without a handler was registered" );
 	{
 		int idx = -1;
 
@@ -594,8 +597,23 @@ static void TestV4( void )
 			snprintf( stCmdArgs[0], sizeof( stCmdArgs[0] ), "MOCK_CMD" );
 			CHECK( mock->commandCalls == 1, "a command of another name reached the plugin" );
 			addedCommandFn[idx]();
-			CHECK( mock->commandCalls == 2 && !strcmp( mock->commandName, "mock_cmd" ) && mock->commandArgc == 2 && !strcmp( mock->commandArg1, "hello" ),
+			CHECK( mock->commandCalls == 2 && !strcmp( mock->commandName, "MOCK_CMD" ) && mock->commandArgc == 2 && !strcmp( mock->commandArg1, "hello" ),
 				"command: calls %d name '%s' argc %d arg '%s'", mock->commandCalls, mock->commandName, mock->commandArgc, mock->commandArg1 );
+
+			// more words than the plugin is given, and a word that is too long: cut, and the plugin is fine
+			snprintf( stCmdArgs[0], sizeof( stCmdArgs[0] ), "MOCK_CMD" );
+			memset( stCmdArgs[1], 'x', 250 );
+			stCmdArgs[1][250] = '\0';
+			for ( i = 2; i < 20; i++ ) {
+				snprintf( stCmdArgs[i], sizeof( stCmdArgs[i] ), "w%d", i );
+			}
+			stCmdArgc = 20;
+			addedCommandFn[idx]();
+			CHECK( mock->commandCalls == 3 && mock->commandArgc == 16 && mock->commandArg1Len == 199 && StateOf( "mock" ) == 0,
+				"20 words: calls %d argc %d length of the first %d state %d", mock->commandCalls, mock->commandArgc, mock->commandArg1Len, StateOf( "mock" ) );
+			stCmdArgc = 1;
+			addedCommandFn[idx]();
+			CHECK( mock->commandCalls == 4 && mock->commandArgc == 1 && mock->commandArg1[0] == '\0', "a command without arguments: argc %d", mock->commandArgc );
 		}
 	}
 

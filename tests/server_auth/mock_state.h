@@ -33,7 +33,7 @@ typedef struct {
 	int			readLen;
 
 	int			httpDone;			// requests that came back
-	int			httpId[4], httpStatus[4], httpBodyLen[4];
+	int			httpId[4], httpStatus[4], httpBodyLen[4], httpUser[4];		// httpUser: what the plugin gave HttpRequest
 	char		httpBody[4][64];
 } mockState_t;
 

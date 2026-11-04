@@ -30,5 +30,3 @@ equ	SetColor		-25
 equ	DrawStretchPic		-26
 equ	DrawModel		-27
 equ	CommandRegister		-28
-equ	CommandArgc		-29
-equ	CommandArgv		-30

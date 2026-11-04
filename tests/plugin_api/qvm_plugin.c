@@ -9,6 +9,37 @@ A QVM program that calls every kind of engine function of test.api, the way the 
 static char buf[64];
 static char saved[32];
 static int pairSum;
+static int handlerSum;
+static int wordsArgc, wordsLen;
+static char wordsText[64];
+
+static void Words( int argc, const char **argv )
+{
+	int i, n = 0;
+
+	wordsArgc = argc;
+	wordsLen = 0;
+	for ( i = 0; i < argc; i++ ) {
+		const char *w = argv[i];
+
+		while ( *w && n < (int)sizeof( wordsText ) - 2 ) {
+			wordsText[n++] = *w++;
+			wordsLen++;
+		}
+		wordsText[n++] = '|';
+	}
+	wordsText[n] = '\0';
+}
+
+static void Handler( int a, const char *text )
+{
+	int n = 0;
+
+	while ( text[n] ) {
+		n++;
+	}
+	handlerSum = a * 10 + n;
+}
 
 int OnPing( int scenario )
 {
@@ -47,6 +78,11 @@ int OnPing( int scenario )
 			}
 			return i * 100 + pairSum;
 		case 21: return (int)( Sin( 0.0f ) * 10.0f + Cos( 0.0f ) * 10.0f + Atan2( 0.0f, 1.0f ) * 10.0f );
+		case 22: return Register( Handler );
+		case 23: return handlerSum;
+		case 24: return RegisterWords( Words );
+		case 25: return wordsArgc * 1000 + wordsLen;
+		case 26: return wordsText[0] * 1000 + wordsText[2];
 	}
 	return -1;
 }

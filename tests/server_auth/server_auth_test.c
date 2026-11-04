@@ -494,13 +494,16 @@ int main( int argc, char **argv )
 		static char longText[260];
 		static const struct {
 			const char *command;
-			const char *wantText;		/* NULL: no event */
+			const char *wantArgs;		/* NULL: the plugin is not called */
 		} chat[] = {
-			{ "say \"!top vq3\"",				"!top vq3" },
-			{ "say \"!top\"",					"!top" },
-			{ "say_team \"!top st1 cpm\"",		"!top st1 cpm" },
-			{ "say !top vq3",					"!top vq3" },			/* the words arrive separately */
-			{ "SAY \"!top\"",					"!top" },
+			{ "say \"!top vq3\"",				"vq3" },
+			{ "say \"!top\"",					"" },
+			{ "say_team \"!top st1 cpm\"",		"st1 cpm" },
+			{ "say !top vq3",					"vq3" },				/* the words arrive separately */
+			{ "SAY \"!top\"",					"" },
+			{ "say \"!TOP vq3\"",				"vq3" },				/* the name is not case sensitive */
+			{ "say \"!other vq3\"",			NULL },					/* nobody registered it */
+			{ "say \"!topvq3\"",				NULL },					/* a different word */
 			{ "say \"hello !top\"",				NULL },					/* not at the start */
 			{ "say \"top\"",					NULL },
 			{ "say",							NULL },
@@ -518,12 +521,12 @@ int main( int argc, char **argv )
 			Cmd_TokenizeString( chat[k].command );
 			SV_Plugin_ChatCommand( chatter );
 			CHECK( lite->eventCount == 0, "'%s' reached a plugin without the chat capability", chat[k].command );
-			if ( chat[k].wantText ) {
-				CHECK( mock->eventCount == 1 && !strcmp( mock->eventName[0], "chat_command" ), "'%s' did not reach the plugin", chat[k].command );
+			if ( chat[k].wantArgs ) {
+				CHECK( mock->eventCount == 1 && !strcmp( mock->eventName[0], "chat_top" ), "'%s' did not reach the plugin", chat[k].command );
 				if ( mock->eventCount == 1 ) {
-					InfoValue( mock->eventData[0], "text", value, sizeof( value ) );
+					InfoValue( mock->eventData[0], "args", value, sizeof( value ) );
 					InfoValue( mock->eventData[0], "client", value2, sizeof( value2 ) );
-					CHECK( !strcmp( value, chat[k].wantText ) && !strcmp( value2, "4" ), "'%s' arrived as text '%s' client '%s'", chat[k].command, value, value2 );
+					CHECK( !strcmp( value, chat[k].wantArgs ) && !strcmp( value2, "4" ), "'%s' arrived with arguments '%s' client '%s'", chat[k].command, value, value2 );
 					CHECK( !strstr( mock->eventData[0], "9.9.9.9" ), "the address of the player is in the chat event" );
 				}
 			} else {
@@ -685,14 +688,43 @@ int main( int argc, char **argv )
 	CHECK( Act( trusted, "trusted", "http", "", "http://other.test/z", 1 ) == 0, "a plugin used the host of another plugin" );
 	CHECK( Act( trusted, "trusted", "http", "", "https://api.test/t", 1 ) > 0, "the allowed host of the second plugin" );
 
-	// the answers go to the plugin that asked, and only inside on_http
+	// a request needs a handler
+	{
+		int before = numTestHttp;
+
+		CHECK( Act( mock, "mock", "httpnohandler", "", "https://api.test/x", 0 ) == 0 && numTestHttp == before, "a request without a handler was started" );
+	}
+
+	// the answers go to the plugin that asked, and only while the handler of the request runs
 	Test_HttpFinish( 0, 200, "pong" );
 	Test_HttpFinish( 3, 404, "nope" );
 	SV_Plugins_Frame();
 	CHECK( mock->httpDone == 1 && mock->httpStatus[0] == 200 && mock->httpBodyLen[0] == 4 && !strcmp( mock->httpBody[0], "pong" ),
 		"answer for the first plugin (%d: %d '%s')", mock->httpDone, mock->httpStatus[0], mock->httpBody[0] );
+	CHECK( mock->httpUser[0] == 7001 && trusted->httpUser[0] == 7001, "the handler did not get the userData of its request (%d)", mock->httpUser[0] );
 	CHECK( trusted->httpDone == 1 && trusted->httpStatus[0] == 404 && !strcmp( trusted->httpBody[0], "nope" ), "answer for the second plugin" );
-	CHECK( Act( mock, "mock", "httpbody", "", "100", 0 ) == 0 && Act( trusted, "trusted", "httpbody", "", "100", 0 ) == 0, "an answer could be read outside of on_http" );
+	CHECK( Act( mock, "mock", "httpbody", "", "100", 0 ) == 0 && Act( trusted, "trusted", "httpbody", "", "100", 0 ) == 0, "an answer could be read outside of its handler" );
+
+	// ------------------------------------------------------------------
+	printf( "events: subscribing\n" );
+	CHECK( Act( mock, "mock", "sub", "extra_event", "", 0 ) == 1, "a plugin could not subscribe" );
+	ClearLogs();
+	SV_Plugin_GameEvent( "extra_event", "\\x\\1" );
+	CHECK( mock->eventCount == 1 && !strcmp( mock->eventName[0], "sub" ) && !strcmp( mock->eventData[0], "\\x\\1" ), "the new subscription got nothing" );
+	CHECK( lite->eventCount == 0 && trusted->eventCount == 0, "a plugin got an event it did not subscribe to" );
+	CHECK( Act( mock, "mock", "sub", "Bad Name", "", 0 ) == 0 && Act( mock, "mock", "sub", "", "", 0 ) == 0, "a bad event name was accepted" );
+	CHECK( Act( mock, "mock", "subnohandler", "other_event", "", 0 ) == 0, "a subscription without a handler was accepted" );
+	CHECK( Act( lite, "lite", "sub", "auth_response", "", 0 ) == 0, "a plugin without the capability auth subscribed to the logins" );
+	CHECK( Act( lite, "lite", "sub", "player_finish", "", 0 ) == 1, "an event that needs no capability was refused" );
+	{
+		int ok = 0;
+
+		/* a plugin has a limited number of subscriptions */
+		for ( i = 0; i < 40; i++ ) {
+			ok += Act( lite2, "lite2", "sub", "limit_test", "", 0 ) == 1;
+		}
+		CHECK( ok > 0 && ok < 40, "the number of subscriptions of a plugin is not limited (%d)", ok );
+	}
 
 	// ------------------------------------------------------------------
 	printf( "plugins that misbehave\n" );

@@ -40,9 +40,10 @@ typedef struct {
 	int				weaponOk;
 	odfcWeaponState_t	weapons;
 	int				modelHandle;
-	int				cmdRegistered, cmdBadName, cmdTaken, cmdSecond;
+	int				cmdRegistered, cmdBadName, cmdTaken, cmdSecond, cmdNoHandler;
 	int				commandCalls, commandArgc;
 	char			commandName[32], commandArg1[32];
+	int				commandArg1Len;		/* the real length of argument 1 */
 	int				filterCalls, filterArgs[4], filterResult;	// set filterResult for what filter_sound returns
 	int				romSeen;
 	int				drawModelFrom3D;

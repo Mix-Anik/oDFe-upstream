@@ -24,11 +24,7 @@ With -DLITE it does not call the functions that need capabilities: it is a plugi
 #define ODF_PLUGIN_CAPS "auth,http,storage"
 #endif
 
-#ifdef LITE
-#define EXPORTS( X ) X(OnInit) X(OnFrame) X(OnEvent)
-#else
-#define EXPORTS( X ) X(OnInit) X(OnFrame) X(OnEvent) X(OnHttp)
-#endif
+#define EXPORTS( X ) X(OnInit) X(OnFrame)
 
 // the entry point has to come first
 #include "odfs_entry.h"
@@ -125,6 +121,23 @@ static void Info( const char *data, const char *key, char *out, int size )
 	}
 }
 
+// ---- what the plugin gives the engine to call ----
+
+static void Log( const char *name, const char *data )
+{
+	if ( st.eventCount < MOCK_MAX_LOG ) {
+		Copy( st.eventName[st.eventCount], name, sizeof( st.eventName[0] ) );
+		Copy( st.eventData[st.eventCount], data, sizeof( st.eventData[0] ) );
+		st.eventCount++;
+	}
+}
+
+static void Handle( const char *name, const char *data );
+static void EvSub( const char *data ) { Handle( "sub", data ); }
+#ifndef LITE
+static void HttpDone( int id, int status, int bodyLen, int userData );
+#endif
+
 #ifndef LITE
 static void Answer( int client, int serial )
 {
@@ -168,6 +181,10 @@ static void Act( const char *data )
 		}
 	} else if ( !Strcmp( action, "badptr" ) ) {
 		GetClientInfo( 0, (odfClientInfo_t *)0x7ffffff0 );
+	} else if ( !Strcmp( action, "sub" ) ) {
+		st.actResult = EventSubscribe( name, EvSub );
+	} else if ( !Strcmp( action, "subnohandler" ) ) {
+		st.actResult = EventSubscribe( name, 0 );
 	}
 #ifndef LITE
 	else if ( !Strcmp( action, "storew" ) ) {
@@ -199,20 +216,84 @@ static void Act( const char *data )
 		st.actResult = pieces;
 	} else if ( !Strcmp( action, "http" ) ) {
 		st.actResult = HttpRequest( ToInt( client ), text,
-			"Authorization: Bearer secret\nContent-Type: application/json\nX-Evil: 1\nHost: elsewhere", "{}", 2, 5000 );
+			"Authorization: Bearer secret\nContent-Type: application/json\nX-Evil: 1\nHost: elsewhere", "{}", 2, 5000,
+			HttpDone, 7000 + ToInt( client ) );
+	} else if ( !Strcmp( action, "httpnohandler" ) ) {
+		st.actResult = HttpRequest( 0, text, NULL, NULL, 0, 5000, 0, 0 );
 	} else if ( !Strcmp( action, "httpbody" ) ) {
 		char buf[64];
 
-		st.actResult = HttpBody( ToInt( text ), 0, buf, sizeof( buf ) );		// outside of on_http: nothing
+		st.actResult = HttpBody( ToInt( text ), 0, buf, sizeof( buf ) );		// outside of the handler of the request: nothing
 	}
 #endif
 }
+
+// one handler for each event the test raises; the log gets the name of the event
+#define EVENT_HANDLER( n ) static void Ev_##n( const char *data ) { Handle( #n, data ); }
+EVENT_HANDLER( player_finish )
+EVENT_HANDLER( client_disconnect )
+EVENT_HANDLER( map_begin )
+EVENT_HANDLER( auth_response )
+EVENT_HANDLER( query )
+EVENT_HANDLER( act )
+EVENT_HANDLER( crash )
+
+#ifndef LITE
+static void Append( char *dst, int size, const char *s )
+{
+	Copy( dst + Strlen( dst ), s, size - Strlen( dst ) );
+}
+
+static void AppendInt( char *dst, int size, int value )
+{
+	char digits[12], one[2];
+	int n = 0;
+	unsigned v = (unsigned)value;
+
+	do {
+		digits[n++] = (char)( '0' + v % 10 );
+		v /= 10;
+	} while ( v );
+	one[1] = '\0';
+	while ( n ) {
+		one[0] = digits[--n];
+		Append( dst, size, one );
+	}
+}
+
+// "!top arguments": the log gets it as an info string
+static void ChatTop( int clientNum, int serial, const char *args )
+{
+	char data[300];
+
+	Begin();
+	data[0] = '\0';
+	Append( data, sizeof( data ), "\\client\\" );
+	AppendInt( data, sizeof( data ), clientNum );
+	Append( data, sizeof( data ), "\\serial\\" );
+	AppendInt( data, sizeof( data ), serial );
+	Append( data, sizeof( data ), "\\args\\" );
+	Append( data, sizeof( data ), args );
+	Log( "chat_top", data );
+	End();
+}
+#endif
 
 int OnInit( void )
 {
 	Begin();
 	st.initCalls++;
 	Print( "mock plugin ready" );
+	EventSubscribe( "player_finish", Ev_player_finish );
+	EventSubscribe( "client_disconnect", Ev_client_disconnect );
+	EventSubscribe( "map_begin", Ev_map_begin );
+	EventSubscribe( "auth_response", Ev_auth_response );		// refused for a plugin without the capability auth
+	EventSubscribe( "query", Ev_query );
+	EventSubscribe( "act", Ev_act );
+	EventSubscribe( "crash", Ev_crash );
+#if !defined( LITE ) && !defined( STOREONLY )
+	ChatCommandRegister( "top", ChatTop );		// needs the capability chat, which only the full mock was given
+#endif
 	End();
 	return 0;
 }
@@ -232,7 +313,7 @@ void OnFrame( int serverTime )
 	End();
 }
 
-void OnEvent( const char *name, const char *data )
+static void Handle( const char *name, const char *data )
 {
 	char target[32];
 
@@ -242,11 +323,7 @@ void OnEvent( const char *name, const char *data )
 		return;
 	}
 	Begin();
-	if ( st.eventCount < MOCK_MAX_LOG ) {
-		Copy( st.eventName[st.eventCount], name, sizeof( st.eventName[0] ) );
-		Copy( st.eventData[st.eventCount], data, sizeof( st.eventData[0] ) );
-		st.eventCount++;
-	}
+	Log( name, data );
 
 	if ( !Strcmp( name, "crash" ) ) {
 		volatile int zero = 0;
@@ -278,12 +355,13 @@ void OnEvent( const char *name, const char *data )
 }
 
 #ifndef LITE
-void OnHttp( int id, int status, int bodyLen )
+static void HttpDone( int id, int status, int bodyLen, int userData )
 {
 	Begin();
 	if ( st.httpDone < 4 ) {
 		int n = st.httpDone++;
 
+		st.httpUser[n] = userData;
 		st.httpId[n] = id;
 		st.httpStatus[n] = status;
 		st.httpBodyLen[n] = bodyLen;

@@ -21,6 +21,9 @@ touch engine memory. The sandbox itself is in plugin_vm.c.
 #define MAX_PLUGIN_CVARS	32
 #define MAX_CVAR_NAME		48
 #define MAX_HTTP_HOSTS		4
+#define MAX_SUBSCRIPTIONS	16		// events a plugin listens to
+#define MAX_CHAT_COMMANDS	32		// "!name" commands of a plugin
+#define MAX_EVENT_NAME		32
 #define MAX_HOST_NAME		64
 #define MAX_MODULE_FILE		( 8 * 1024 * 1024 )
 
@@ -59,7 +62,26 @@ typedef struct {
 	int				storeMaxFile;	// storage[=size]: the most one file can have
 	int				storeMaxTotal;	// and all of its files
 	int				httpAnswer;		// the id of the request whose answer it may read right now
+	struct {
+		char		name[MAX_EVENT_NAME];
+		int			handler;
+	}				events[MAX_SUBSCRIPTIONS];
+	int				numEvents;
+	struct {
+		char		name[MAX_EVENT_NAME];
+		int			handler;
+	}				chatCommands[MAX_CHAT_COMMANDS];
+	int				numChatCommands;
 } plugin_t;
+
+// what to call when a request of a plugin is done (the engine keeps it: the request knows only its plugin)
+typedef struct {
+	int				id;			// 0: free
+	plugin_t		*plugin;
+	int				handler;
+	int				userData;
+} httpCall_t;
+static httpCall_t		httpCalls[SV_HTTP_MAX_RUNNING + SV_HTTP_MAX_FINISHED];
 
 static plugin_t			plugins[MAX_PLUGINS];
 static int				numPlugins;
@@ -413,12 +435,14 @@ static qboolean UrlHost( const char *url, char *host, int hostSize )
 	return qtrue;
 }
 
-static int Imp_HttpRequest( int method, const char *url, const char *headers, const char *body, int bodyLen, int timeoutMs )
+static int Imp_HttpRequest( int method, const char *url, const char *headers, const char *body, int bodyLen, int timeoutMs,
+	int handler, int userData )
 {
 	char host[MAX_HOST_NAME];
-	int i;
+	httpCall_t *call = NULL;
+	int i, id;
 
-	if ( !current || !url || !UrlHost( url, host, sizeof( host ) ) ) {
+	if ( !current || !url || handler == 0 || !UrlHost( url, host, sizeof( host ) ) ) {
 		return 0;
 	}
 	for ( i = 0; i < current->numHosts; i++ ) {
@@ -430,7 +454,23 @@ static int Imp_HttpRequest( int method, const char *url, const char *headers, co
 		Com_Printf( S_COLOR_YELLOW "Plugin '%s': %s is not one of the hosts it may talk to\n", current->name, host );
 		return 0;
 	}
-	return SV_Http_Start( method, url, headers, body, bodyLen, timeoutMs, current );
+	for ( i = 0; i < (int)ARRAY_LEN( httpCalls ); i++ ) {
+		if ( !httpCalls[i].id ) {
+			call = &httpCalls[i];
+			break;
+		}
+	}
+	if ( !call ) {
+		return 0;
+	}
+	id = SV_Http_Start( method, url, headers, body, bodyLen, timeoutMs, current );
+	if ( id > 0 ) {
+		call->id = id;
+		call->plugin = current;
+		call->handler = handler;
+		call->userData = userData;
+	}
+	return id;
 }
 
 static int Imp_HttpBody( int id, int offset, char *out, int outSize )
@@ -439,6 +479,56 @@ static int Imp_HttpBody( int id, int offset, char *out, int outSize )
 		return 0;		// only the answer that is being handed over right now
 	}
 	return SV_Http_Body( id, offset, out, outSize );
+}
+
+// ---- events and chat commands ----
+
+static unsigned EventCap( const char *name );
+
+// lower case letters, digits and _ (the names of events and of chat commands)
+static qboolean ValidWord( const char *name )
+{
+	int i, len = (int)strlen( name );
+
+	if ( len < 1 || len >= MAX_EVENT_NAME ) {
+		return qfalse;
+	}
+	for ( i = 0; i < len; i++ ) {
+		char c = name[i];
+
+		if ( !( ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' ) || c == '_' ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+static int Imp_EventSubscribe( const char *name, int handler )
+{
+	unsigned cap;
+
+	if ( !current || !name || handler == 0 || !ValidWord( name ) || current->numEvents >= MAX_SUBSCRIPTIONS ) {
+		return 0;
+	}
+	cap = EventCap( name );
+	if ( cap && !( current->caps & cap ) ) {
+		return 0;
+	}
+	Q_strncpyz( current->events[current->numEvents].name, name, MAX_EVENT_NAME );
+	current->events[current->numEvents].handler = handler;
+	current->numEvents++;
+	return 1;
+}
+
+static int Imp_ChatCommandRegister( const char *name, int handler )
+{
+	if ( !current || !name || handler == 0 || !ValidWord( name ) || current->numChatCommands >= MAX_CHAT_COMMANDS ) {
+		return 0;
+	}
+	Q_strncpyz( current->chatCommands[current->numChatCommands].name, name, MAX_EVENT_NAME );
+	current->chatCommands[current->numChatCommands].handler = handler;
+	current->numChatCommands++;
+	return 1;
 }
 
 // ---- the store ----
@@ -603,7 +693,14 @@ static void FORMAT_PRINTF( 2, 3 ) Plugin_Fail( plugin_t *p, const char *fmt, ...
 
 static void Plugin_Unload( plugin_t *p )
 {
+	int i;
+
 	SV_Http_Abort( p );
+	for ( i = 0; i < (int)ARRAY_LEN( httpCalls ); i++ ) {
+		if ( httpCalls[i].plugin == p ) {
+			Com_Memset( &httpCalls[i], 0, sizeof( httpCalls[i] ) );
+		}
+	}
 	PluginVM_Free( p->vm );
 	p->vm = NULL;
 }
@@ -1052,11 +1149,24 @@ void SV_Plugins_Frame( void )
 		SV_Http_Pump();
 		while ( SV_Http_Finished( &id, &status, &bodyLen, &owner ) ) {
 			plugin_t *p = (plugin_t *)owner;
+			httpCall_t *call = NULL;
+			int k;
 
-			if ( p->state == PS_RUNNING && PLUGIN_HAS( p, OnHttp ) ) {
+			for ( k = 0; k < (int)ARRAY_LEN( httpCalls ); k++ ) {
+				if ( httpCalls[k].id == id && httpCalls[k].plugin == p ) {
+					call = &httpCalls[k];
+					break;
+				}
+			}
+			if ( call && p->state == PS_RUNNING && PLUGIN_HAS( p, HttpHandler ) ) {
+				int handler = call->handler, userData = call->userData;
+
 				p->httpAnswer = id;
-				PLUGIN_RUN( p, "OnHttp", ODFS_Call_OnHttp( p->vm, id, status, bodyLen ) );
+				PLUGIN_RUN( p, "http handler", ODFS_Call_HttpHandler( p->vm, handler, id, status, bodyLen, userData ) );
 				p->httpAnswer = 0;
+			}
+			if ( call ) {
+				Com_Memset( call, 0, sizeof( *call ) );
 			}
 			SV_Http_Release( id );
 		}
@@ -1085,8 +1195,9 @@ void SV_Plugin_Event( const char *name, const char *data )
 		plugin_t *p = &plugins[i];
 		char stripped[MAX_INFO_STRING];
 		const char *send = data;
+		int k;
 
-		if ( p->state != PS_RUNNING || !PLUGIN_HAS( p, OnEvent ) || ( cap && !( p->caps & cap ) ) ) {
+		if ( p->state != PS_RUNNING || !p->numEvents || !PLUGIN_HAS( p, EventHandler ) || ( cap && !( p->caps & cap ) ) ) {
 			continue;
 		}
 		// the address of a player is only for the plugins that may have it
@@ -1095,7 +1206,11 @@ void SV_Plugin_Event( const char *name, const char *data )
 			Info_RemoveKey( stripped, "ip" );
 			send = stripped;
 		}
-		PLUGIN_RUN( p, "OnEvent", ODFS_Call_OnEvent( p->vm, name, send ) );
+		for ( k = 0; k < p->numEvents && p->state == PS_RUNNING; k++ ) {
+			if ( !strcmp( p->events[k].name, name ) ) {
+				PLUGIN_RUN( p, "event handler", ODFS_Call_EventHandler( p->vm, p->events[k].handler, send ) );
+			}
+		}
 	}
 }
 
@@ -1165,6 +1280,41 @@ void SV_Plugins_MapBegin( const char *mapname, int checksum )
 
 #define CHAT_COMMAND_MAX	200
 
+// text is "!name arguments": hands it to the plugins that registered the name
+static void ChatCommand( int clientNum, int serial, const char *text )
+{
+	char name[MAX_EVENT_NAME];
+	const char *args;
+	int i, n;
+
+	for ( n = 0; text[1 + n] && text[1 + n] != ' '; n++ ) {
+		if ( n >= MAX_EVENT_NAME - 1 ) {
+			return;
+		}
+		name[n] = text[1 + n];
+	}
+	name[n] = '\0';
+	args = text + 1 + n;
+	while ( *args == ' ' ) {
+		args++;
+	}
+
+	for ( i = 0; i < numPlugins; i++ ) {
+		plugin_t *p = &plugins[i];
+		int k;
+
+		if ( p->state != PS_RUNNING || !p->numChatCommands || !( p->caps & ODFS_CAP_chat ) || !PLUGIN_HAS( p, ChatCommandHandler ) ) {
+			continue;
+		}
+		for ( k = 0; k < p->numChatCommands && p->state == PS_RUNNING; k++ ) {
+			if ( !Q_stricmp( p->chatCommands[k].name, name ) ) {
+				PLUGIN_RUN( p, "chat command handler",
+					ODFS_Call_ChatCommandHandler( p->vm, p->chatCommands[k].handler, clientNum, serial, args ) );
+			}
+		}
+	}
+}
+
 /*
 ===============
 SV_Plugin_ChatCommand
@@ -1177,7 +1327,6 @@ cannot carry are not passed on.
 void SV_Plugin_ChatCommand( client_t *cl )
 {
 	char text[CHAT_COMMAND_MAX + 1];
-	char data[MAX_INFO_STRING] = "";
 	const char *cmd;
 	int i, len = 0;
 
@@ -1216,10 +1365,7 @@ void SV_Plugin_ChatCommand( client_t *cl )
 		}
 	}
 
-	Info_SetValueForKey( data, "client", va( "%i", (int)( cl - svs.clients ) ) );
-	Info_SetValueForKey( data, "serial", va( "%i", cl->auth.serial ) );
-	Info_SetValueForKey( data, "text", text );
-	SV_Plugin_Event( "chat_command", data );
+	ChatCommand( (int)( cl - svs.clients ), cl->auth.serial, text );
 }
 
 qboolean SV_Plugins_HandleAuth( void )

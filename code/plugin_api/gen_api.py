@@ -19,6 +19,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_COUNT = 1 << 20
 MAX_SLOTS = 14          # the engine gets the number of the function and at most 15 values
+MAX_STRV = 16           # the most strings the engine hands over in a strv(...) argument
 
 SOURCES = [
     ("client.api", "cl_plugin_api.inc"),
@@ -29,7 +30,7 @@ SOURCES = [
 class Param:
     def __init__(self, name, kind, ctype=None, count=None, nullable=False):
         self.name = name
-        self.kind = kind          # i32 f32 i64 str ptrin ptrout
+        self.kind = kind          # i32 f32 i64 str ptrin ptrout fn (a handler: ctype is the name of its handler type) strv (an array of strings; count is the parameter with their number)
         self.ctype = ctype        # element type for pointers
         self.count = count        # int, a parameter name, or None (1)
         self.nullable = nullable
@@ -50,11 +51,21 @@ class Func:
         self.cheat = cheat        # only works while cheats are allowed
         self.budget = budget
         self.doc = doc
+        self.handler = None       # the Handler this export calls (exports made for handler types)
+
+
+class Handler:
+    """A kind of function the plugin hands to the engine (a callback): its parameters are what the engine passes when it calls it."""
+    def __init__(self, name, params, doc):
+        self.name = name
+        self.params = params
+        self.doc = doc
 
 
 class Api:
     def __init__(self):
         self.module = None
+        self.handlers = []        # Handler
         self.version = 1
         self.types = None
         self.caps = []            # (name, restricted, doc)
@@ -87,6 +98,12 @@ def parse_type(name, text):
         return Param(name, "str")
     if text == "str?":
         return Param(name, "str", nullable=True)
+    m = re.fullmatch(r"strv\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", text)
+    if m:
+        return Param(name, "strv", count=m.group(1))
+    m = re.fullmatch(r"fn\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", text)
+    if m:
+        return Param(name, "fn", ctype=m.group(1))
     m = re.fullmatch(r"(in|out)(\?)?\(\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*(?:,\s*([A-Za-z0-9_]+)\s*)?\)", text)
     if m:
         direction, q, ctype, count = m.groups()
@@ -155,6 +172,12 @@ def parse_into(api, path):
         elif tok[0] == "include":
             parse_into(api, os.path.join(os.path.dirname(path), tok[1].strip()))
             doc = []
+        elif tok[0] == "handler":
+            mh = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*", tok[1])
+            if not mh:
+                raise SystemExit("cannot parse: " + line)
+            api.handlers.append(Handler(mh.group(1), parse_params(mh.group(2)), [d for d in doc]))
+            doc = []
         elif tok[0] == "cap":
             rest = tok[1].split(None, 1)
             name = rest[0]
@@ -180,6 +203,30 @@ def parse(path):
     for n in names:
         if names.count(n) > 1:
             raise SystemExit("%s is defined twice" % n)
+    hnames = [h.name for h in api.handlers]
+    for n in hnames:
+        if hnames.count(n) > 1 or n in names:
+            raise SystemExit("%s is defined twice" % n)
+    for h in api.handlers:
+        for k, p in enumerate(h.params):
+            if p.kind not in ("i32", "str", "strv"):
+                raise SystemExit("handler %s: a parameter can only be i32, str or strv (%s)" % (h.name, p.name))
+            if p.kind == "strv" and (k == 0 or h.params[k - 1].name != p.count or h.params[k - 1].kind != "i32"):
+                raise SystemExit("handler %s: %s needs the i32 parameter %s right before it" % (h.name, p.name, p.count))
+        if len(h.params) > 7:
+            raise SystemExit("handler %s has too many arguments" % h.name)
+    for f in api.funcs:
+        for p in f.params:
+            if p.kind == "fn":
+                if f.kind != "import":
+                    raise SystemExit("%s: only an import can take a handler" % f.name)
+                if p.ctype not in hnames:
+                    raise SystemExit("%s: unknown handler type %s" % (f.name, p.ctype))
+    # the engine calls a handler through an export of its own: the plugin passes the function, the first argument is it
+    for h in api.handlers:
+        fe = Func("export", h.name, [Param("handler", "i32")] + h.params, None, None, False, "frame", h.doc)
+        fe.handler = h
+        api.funcs.append(fe)
     for f in api.funcs:
         if f.cap and f.cap not in [c[0] for c in api.caps]:
             raise SystemExit("%s uses the unknown capability %s" % (f.name, f.cap))
@@ -201,13 +248,21 @@ def ret_ctype(f):
     return {"i32": "int", "f32": "float", None: "void"}[f.ret]
 
 
-def plugin_ctype(p):
+def handler_type(M, name):
+    return "%s%s_t" % (M, name)
+
+
+def plugin_ctype(p, M=None):
+    if p.kind == "fn":
+        return handler_type(M, p.ctype)
     if p.kind == "i32":
         return "int"
     if p.kind == "f32":
         return "float"
     if p.kind == "str":
         return "const char *"
+    if p.kind == "strv":
+        return "const char **"
     if p.buffer:
         if p.kind == "ptrin":
             return "const void *"
@@ -215,7 +270,7 @@ def plugin_ctype(p):
     return ("const %s *" if p.kind == "ptrin" else "%s *") % p.ctype
 
 
-def plugin_params(params):
+def plugin_params(params, M=None):
     """The C parameter list of a function as the plugin sees it. A 64 bit number is two 32 bit ones (the VM has no 64 bit
     integers): the low half first."""
     if not params:
@@ -226,7 +281,7 @@ def plugin_params(params):
             out.append("unsigned %sLo" % p.name)
             out.append("unsigned %sHi" % p.name)
             continue
-        t = plugin_ctype(p)
+        t = plugin_ctype(p, M)
         out.append(t + ("" if t.endswith("*") else " ") + p.name)
     return ", ".join(out)
 
@@ -258,6 +313,17 @@ def gen_header(api, src):
     o.append("// A function marked 'cheats only' does nothing and returns 0 unless cheats are allowed (see CheatsEnabled): the engine")
     o.append("// decides, not the plugin.")
     o.append("")
+    if api.handlers:
+        o.append("// ---------------------------------------------------------------------------")
+        o.append("// Handlers: functions of the plugin that it gives to the engine (as an argument of one of the functions below).")
+        o.append("// The engine calls them with exactly these arguments. A handler is an ordinary function with this prototype.")
+        o.append("// ---------------------------------------------------------------------------")
+        for h in api.handlers:
+            o.append("")
+            for d in h.doc:
+                o.append("//" + (" " + d if d else ""))
+            o.append("typedef void ( *%s )( %s );" % (handler_type(M, h.name), plugin_params(h.params, M)))
+        o.append("")
     for f in api.funcs:
         if f.kind != "import":
             continue
@@ -268,20 +334,20 @@ def gen_header(api, src):
             o.append("// Capability: %s" % f.cap)
         if f.cheat:
             o.append("// Cheats only.")
-        o.append("%s %s( %s );" % (ret_ctype(f), f.name, plugin_params(f.params)))
+        o.append("%s %s( %s );" % (ret_ctype(f), f.name, plugin_params(f.params, M)))
     o.append("\n\n// ---------------------------------------------------------------------------")
     o.append("// Exports: implement the ones you need with exactly these prototypes and list them in the EXPORTS")
     o.append("// of the entry point (see %s_entry.h)." % M)
     o.append("// ---------------------------------------------------------------------------")
     for f in api.funcs:
-        if f.kind != "export":
+        if f.kind != "export" or f.handler:
             continue
         o.append("")
         for d in f.doc:
             o.append("//" + (" " + d if d else ""))
         if f.cap:
             o.append("// Capability: %s" % f.cap)
-        o.append("%s %s( %s );" % ("int" if f.ret else "void", f.name, plugin_params(f.params)))
+        o.append("%s %s( %s );" % ("int" if f.ret else "void", f.name, plugin_params(f.params, M)))
     o.append("\n#endif // %s_H\n" % U)
     return "\n".join(o)
 
@@ -299,9 +365,14 @@ def gen_syscalls(api, src):
     return "\n".join(o) + "\n"
 
 
-def export_case(f, index):
+def export_case(f, index, M=None):
     """The line of the entry point that calls an export: a is the array of arguments the engine put in the io buffer."""
     args = []
+    if f.handler:
+        # the first argument is the function the plugin handed over; the others are for it
+        for i, p in enumerate(f.params[1:], 1):
+            args.append({"str": "(const char *)a[%d]", "strv": "(const char **)a[%d]"}.get(p.kind, "a[%d]") % i)
+        return "( (%s)a[0] )( %s )" % (handler_type(M, f.handler.name), ", ".join(args))
     for i, p in enumerate(f.params):
         if p.kind == "str":
             args.append("(const char *)a[%d]" % i)
@@ -340,14 +411,21 @@ def gen_entry(api, src):
              "#define ODF_PLUGIN_API ODF_STRINGIFY( %s_API_VERSION )\n"
              "#endif" % (M, U))
     o.append("#ifndef %s\n#error define %s( X ) before including %s_entry.h\n#endif\n" % (X, X, M))
-    exports = [f for f in api.funcs if f.kind == "export"]
-    for i, f in enumerate(exports):
-        call = export_case(f, i)
+    allexports = [f for f in api.funcs if f.kind == "export"]
+    for i, f in enumerate(allexports):
+        call = export_case(f, i, M)
+        if f.handler:
+            continue
         if f.ret:
             o.append("#define %s_CASE_%s\tcase %d: return %s;" % (U, f.name, i, call))
         else:
             o.append("#define %s_CASE_%s\tcase %d: %s; return 0;" % (U, f.name, i, call))
         o.append("#define %s_BIT_%s\t| ( 1 << %d )" % (U, f.name, i))
+    # the exports for handlers are always there: the engine only calls the ones the plugin gave it
+    hcases = " ".join("case %d: %s; return 0;" % (i, export_case(f, i, M)) for i, f in enumerate(allexports) if f.handler)
+    hbits = "".join(" | ( 1 << %d )" % i for i, f in enumerate(allexports) if f.handler)
+    o.append("#define %s_HANDLER_CASES\t%s" % (U, hcases))
+    o.append("#define %s_HANDLER_BITS\t%s" % (U, hbits or "| 0"))
     o.append("#define %s_X_CASE( name )\t%s_CASE_##name" % (U, U))
     o.append("#define %s_X_BIT( name )\t%s_BIT_##name\n" % (U, U))
     o.append("static char odf_io_buffer[ODF_IO_SIZE];\n")
@@ -362,8 +440,9 @@ def gen_entry(api, src):
              "\t\t\t\t\"api=\" ODF_PLUGIN_API \"\\n\"\n"
              "\t\t\t\t\"caps=\" ODF_PLUGIN_CAPS \"\\n\"\n"
              "\t\t\t\t\"description=\" ODF_PLUGIN_DESCRIPTION );" % M)
-    o.append("\t\tcase ODF_CMD_EXPORTS:\n\t\t\treturn 0 %s( %s_X_BIT );" % (X, U))
+    o.append("\t\tcase ODF_CMD_EXPORTS:\n\t\t\treturn 0 %s( %s_X_BIT ) %s_HANDLER_BITS;" % (X, U, U))
     o.append("\t\t%s( %s_X_CASE )" % (X, U))
+    o.append("\t\t%s_HANDLER_CASES" % U)
     o.append("\t}")
     o.append("\treturn 0;")
     o.append("}\n")
@@ -376,7 +455,7 @@ def gen_entry(api, src):
 # ---------------------------------------------------------------------------
 
 def host_ctype(p):
-    if p.kind == "i32":
+    if p.kind in ("i32", "fn"):
         return "int"
     if p.kind == "f32":
         return "float"
@@ -472,7 +551,7 @@ def gen_inc(api, src):
             s = slot[p.name]
             if p.kind in ("ptrin", "ptrout", "str"):
                 cargs.append("p_" + p.name)
-            elif p.kind == "i32":
+            elif p.kind in ("i32", "fn"):
                 cargs.append("(int)args[%d]" % s)
             elif p.kind == "f32":
                 cargs.append("Odf_ArgFloat( args[%d] )" % s)
@@ -505,6 +584,8 @@ def gen_inc(api, src):
         for p in f.params:
             if p.kind == "str":
                 cparams.append("const char *a_%s" % p.name)
+            elif p.kind == "strv":
+                cparams.append("const char *const *a_%s" % p.name)
             elif p.kind == "i32":
                 cparams.append("int a_%s" % p.name)
             elif p.kind == "ptrin":
@@ -518,9 +599,20 @@ def gen_inc(api, src):
         if ret:
             o.append("\t\t*result = 0;")
         o.append("\t\treturn qtrue;\n\t}")
+        for p in f.params:
+            if p.kind == "strv":
+                o.append("\tif ( a_%s > %d ) {\n\t\ta_%s = %d;\t\t// the most strings that are handed over\n\t}" % (p.count, MAX_STRV, p.count, MAX_STRV))
+                o.append("\tif ( a_%s < 0 ) {\n\t\ta_%s = 0;\n\t}" % (p.count, p.count))
         o.append("\tPluginVM_IOBegin( w );")
         for i, p in enumerate(f.params):
-            if p.kind == "str":
+            if p.kind == "strv":
+                # every string into the io buffer, then the array of their offsets
+                o.append("\t{\n\t\tunsigned offsets[%d];\n\t\tint k;\n" % MAX_STRV +
+                         "\t\tfor ( k = 0; k < a_%s; k++ ) {\n\t\t\toffsets[k] = PluginVM_IOPutString( w, a_%s[k] );\n"
+                         "\t\t\tif ( !offsets[k] ) {\n\t\t\t\tPluginVM_Fail( w, \"the arguments of %s do not fit the io buffer\" );\n\t\t\t\treturn qfalse;\n\t\t\t}\n\t\t}\n"
+                         "\t\to = PluginVM_IOPut( w, offsets, sizeof( offsets[0] ) * ( a_%s ? a_%s : 1 ), 4 );\n\t}" %
+                         (p.count, p.name, f.name, p.count, p.count))
+            elif p.kind == "str":
                 o.append("\to = PluginVM_IOPutString( w, a_%s );" % p.name)
             elif p.kind == "ptrin":
                 o.append("\to = PluginVM_IOPut( w, a_%s, sizeof( %s ), __alignof__( %s ) < 4 ? __alignof__( %s ) : 4 );" % (p.name, p.ctype, p.ctype, p.ctype))

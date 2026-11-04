@@ -26,6 +26,15 @@ call (engine functions) and what it can implement for the engine to call (export
 // A function marked 'cheats only' does nothing and returns 0 unless cheats are allowed (see CheatsEnabled): the engine
 // decides, not the plugin.
 
+// ---------------------------------------------------------------------------
+// Handlers: functions of the plugin that it gives to the engine (as an argument of one of the functions below).
+// The engine calls them with exactly these arguments. A handler is an ordinary function with this prototype.
+// ---------------------------------------------------------------------------
+
+// The function of the plugin that runs a console command, like main: argv[0] is the name as it was typed, the others are the
+// arguments, argc counts all of them. At most 16 are passed (the rest is dropped) and each is cut after 199 characters.
+typedef void ( *odfcCommandHandler_t )( int argc, const char **argv );
+
 
 // Writes a line to the console, prefixed with the plugin name.
 void Print( const char *text );
@@ -122,17 +131,11 @@ void DrawStretchPic( float x, float y, float w, float h, float s1, float t1, flo
 // Capability: draw
 void DrawModel( float x, float y, float w, float h, int model, const float *origin, const float *angles, int time );
 
-// Adds a console command (lower case letters, digits and _, up to 31 long) that calls the plugin's command export. Returns 0
-// when the name is invalid or already used by the engine or another plugin. Commands are removed when the plugin stops.
+// Adds a console command (lower case letters, digits and _, up to 31 long) that calls handler when it is entered. Returns 0 when
+// the name is invalid, handler is NULL or the name is already used by the engine or another plugin. Commands are removed when
+// the plugin stops.
 // Capability: command
-int CommandRegister( const char *name );
-
-// The arguments of the command being run (in command): the count, and argument n (0 is the name) copied to out.
-// Capability: command
-int CommandArgc( void );
-
-// Capability: command
-void CommandArgv( int n, char *out, int outSize );
+int CommandRegister( const char *name, odfcCommandHandler_t handler );
 
 
 // ---------------------------------------------------------------------------
@@ -158,10 +161,6 @@ void OnDraw3D( const odfcView_t *view );
 
 // Called twice per frame, with an ODFC_DRAW2D_* phase.
 void OnDraw2D( int phase );
-
-// A command registered with CommandRegister was entered in the console; the arguments are available through CommandArgc and
-// CommandArgv.
-void OnCommand( const char *name );
 
 // Called for every sound the game module starts on an entity or loops on one. Return non-zero to drop the sound. entityNum is
 // the entity (1023 is the world), isLoop whether it is a looping sound, entityClientNum the clientNum field of that entity in the

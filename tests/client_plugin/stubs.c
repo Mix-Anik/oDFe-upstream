@@ -44,7 +44,7 @@ int stSoundCalls;
 int numAddedCommands;
 char addedCommands[32][32];
 xcommand_t addedCommandFn[32];
-char stCmdArgs[8][64];
+char stCmdArgs[24][256];
 int stCmdArgc;
 int stCvarFlagsLast;
 

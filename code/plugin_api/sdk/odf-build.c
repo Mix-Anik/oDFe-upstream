@@ -5,7 +5,8 @@ odf-build: builds an oDFe plugin (a QVM program) from C sources.
     odf-build --server -o plugins/myplugin.qvm -DDEBUG -Iinclude main.c
 
 The first source file has to include the entry point (odfc_entry.h or odfs_entry.h), the VM wants it first in the program.
-The C library of the SDK (odf_lib.c) and the engine functions (odfc_syscalls.asm / odfs_syscalls.asm) are added at the end.
+The C library of the SDK (odf_lib.c) and the engine functions (odfc_syscalls.asm / odfs_syscalls.asm) are added at the end,
+and so is every library of the SDK a source includes the header of (odf_json.h: odf_json.c): see add_libraries.
 
 This one program has everything: the preprocessor, the compiler and the assembler (lcc and q3asm of ioquake3, in
 ../toolchain) and the files of the SDK (headers, C library). It runs the tools as itself, one process for each step:
@@ -1111,13 +1112,74 @@ static char *with_slashes( char *path )
 	return path;
 }
 
+/* An SDK library is a header odf_<name>.h in the SDK folder with an odf_<name>.c beside it (odf_json, odf_http ...). A program that
+   includes the header, also through other headers, gets the .c file added to the build. pre is the preprocessed source: its #line
+   lines name every file that was read. */
+#define MAX_LIBS	16
+
+static void add_libraries( const char *pre, const char *sdk_dir, char **sources, int *num_sources )
+{
+	size_t size, dir_len;
+	char *text = read_file( pre, &size ), *dir = with_slashes( xstrdup( sdk_dir ) ), *p = text;
+
+	dir_len = strlen( dir );
+	while ( *p ) {
+		char *line_end = strchr( p, '\n' );
+
+		if ( !strncmp( p, "#line ", 6 ) ) {
+			char *open = strchr( p, '"' ), *close = open ? strchr( open + 1, '"' ) : NULL;
+
+			if ( open && close && ( !line_end || close < line_end ) ) {
+				char *path = (char *)xmalloc( (size_t)( close - open ) );
+				const char *name;
+				size_t name_len;
+
+				memcpy( path, open + 1, (size_t)( close - open - 1 ) );
+				path[close - open - 1] = '\0';
+				with_slashes( path );
+				name = strlen( path ) > dir_len + 1 ? path + dir_len + 1 : "";
+				name_len = strlen( name );
+				/* sdk/odf_<name>.h, not in a folder below it */
+				if ( !strncmp( path, dir, dir_len ) && path[dir_len] == '/' && !strncmp( name, "odf_", 4 ) && name_len > 6 &&
+						!strcmp( name + name_len - 2, ".h" ) && !strchr( name, '/' ) ) {
+					char *lib = path_join( sdk_dir, fmt( "%.*s.c", (int)( name_len - 2 ), name ) );
+					int k, have = 0;
+
+					if ( is_file( lib ) ) {
+						for ( k = 0; k < *num_sources; k++ ) {
+							char *a = with_slashes( xstrdup( sources[k] ) ), *b = with_slashes( xstrdup( lib ) );
+
+							have |= !strcmp( a, b );
+							free( a );
+							free( b );
+						}
+						if ( !have ) {
+							if ( *num_sources >= MAX_LIST + MAX_LIBS ) {
+								die( "too many source files" );
+							}
+							sources[( *num_sources )++] = lib;
+						}
+					}
+				}
+				free( path );
+			}
+		}
+		if ( !line_end ) {
+			break;
+		}
+		p = line_end + 1;
+	}
+	free( dir );
+	free( text );
+}
+
 int main( int argc, char **argv )
 {
 	int module = -1, no_lib = 0, i, n, num_includes = 0, num_defines = 0, num_sources = 0;
 	const char *output = NULL, *sdk = getenv( "ODF_SDK" ), *syscalls_arg = NULL, *map = NULL, *v;
 	const char *inputs[MAX_LIST], *define_list[MAX_LIST], *include_arg[MAX_LIST];
-	char *include_dirs[MAX_LIST + 3], *sources[MAX_LIST + 1];
-	char *self, *syscalls, *sdk_dir, *include_root, *work, *out, *objects[MAX_LIST + 1];
+	char *include_dirs[MAX_LIST + 3], *sources[MAX_LIST + MAX_LIBS + 1];
+	char *self, *syscalls, *sdk_dir, *include_root, *work, *out, *objects[MAX_LIST + MAX_LIBS + 1];
 	size_t size;
 
 	if ( argc >= 3 && !strcmp( argv[1], "--run-tool" ) ) {
@@ -1283,6 +1345,7 @@ int main( int argc, char **argv )
 		args[na++] = pre;
 		args[na] = NULL;
 		run( args, folder, "the preprocessor" );
+		add_libraries( pre, sdk_dir, sources, &num_sources );
 
 		/* the compiler */
 		na = 0;
@@ -1302,7 +1365,7 @@ int main( int argc, char **argv )
 
 	/* the assembler writes a map file next to the program, so it works in the temporary folder */
 	{
-		char *args[MAX_LIST + 16];
+		char *args[MAX_LIST + MAX_LIBS + 16];
 		int na = 0;
 
 		args[na++] = self;

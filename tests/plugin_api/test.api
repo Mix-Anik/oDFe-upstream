@@ -19,6 +19,14 @@ import Wide( id: i64, tag: i32 ) -> i32
 import Vec( v: in(float,3), w: out(float,3) ) -> i32
 import Nothing()
 
+# a function of the plugin the engine calls later
+handler PingHandler( a: i32, text: str )
+import Register( handler: fn(PingHandler) ) -> i32
+
+# a handler with a list of strings, like main( argc, argv )
+handler WordsHandler( argc: i32, argv: strv(argc) )
+import RegisterWords( handler: fn(WordsHandler) ) -> i32
+
 export OnPing( x: i32 ) -> i32
 export OnSay( text: str )
 export OnWithStruct( p: in(odftPair_t) ) -> i32

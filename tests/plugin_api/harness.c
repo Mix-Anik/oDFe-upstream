@@ -41,6 +41,9 @@ static float Imp_HalfOf( float a, float b ) { return ( a + b ) / 2; }
 static int Imp_Wide( int64_t id, int tag ) { return (int)( id >> 32 ) * 1000 + (int)( id & 0xFFFF ) + tag; }
 static int Imp_Vec( const float *v, float *w ) { w[0] = v[0] * 2; w[1] = v[1] * 2; w[2] = v[2] * 2; return 3; }
 static void Imp_Nothing( void ) { nothingCalls++; }
+static int registered;
+static int Imp_Register( int handler ) { registered = handler; return handler != 0; }
+static int Imp_RegisterWords( int handler ) { registered = handler; return handler != 0; }
 
 static void *image;
 static int imageSize;
@@ -177,6 +180,42 @@ int main( int argc, char **argv )
 			CHECK( ODFT_Call_OnSay( vm, "hello" ), "say" );
 			CHECK( ODFT_Call_OnWithStruct( vm, &pair, &r ) && r == 42, "with_struct: %d", r );
 			CHECK( ODFT_Call_OnPing( vm, 20, &r ) && r == 542, "the plugin kept the string and the sum: %d", r );
+			PluginVM_Free( vm );
+		}
+
+		// a handler: the plugin hands a function to the engine, the engine calls it later with arguments
+		vm = Load( 0 );
+		if ( vm ) {
+			registered = 0;
+			CHECK( ODFT_Call_OnPing( vm, 22, &r ) && r == 1 && registered != 0, "register: %d handler %d", r, registered );
+			CHECK( ODFT_Call_PingHandler( vm, registered, 4, "abc" ), "the handler was not called" );
+			CHECK( ODFT_Call_OnPing( vm, 23, &r ) && r == 43, "the handler got other arguments: %d", r );
+			// a number that is not a function of the plugin stops it, the engine is not hurt
+			CHECK( !ODFT_Call_PingHandler( vm, 0x3FFFFFF, 1, "x" ), "a handler outside of the code was called" );
+			CHECK( PluginVM_Error( vm )[0] != '\0', "no reason for the stop" );
+			PluginVM_Free( vm );
+		}
+		// a list of strings
+		vm = Load( 0 );
+		if ( vm ) {
+			static const char *const words[20] = { "hello", "World", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r" };
+
+			registered = 0;
+			CHECK( ODFT_Call_OnPing( vm, 24, &r ) && r == 1 && registered != 0, "register words: %d", r );
+			CHECK( ODFT_Call_WordsHandler( vm, registered, 2, words ), "the handler with words was not called" );
+			CHECK( ODFT_Call_OnPing( vm, 25, &r ) && r == 2000 + 10, "argc and the letters: %d", r );
+			CHECK( ODFT_Call_OnPing( vm, 26, &r ) && r == 'h' * 1000 + 'l', "the words arrived changed: %d", r );
+			CHECK( ODFT_Call_WordsHandler( vm, registered, 0, words ), "no words" );
+			CHECK( ODFT_Call_OnPing( vm, 25, &r ) && r == 0, "no words: %d", r );
+			// more than 16 words: the first 16 are passed, argc says 16
+			CHECK( ODFT_Call_WordsHandler( vm, registered, 20, words ), "too many words" );
+			CHECK( ODFT_Call_OnPing( vm, 25, &r ) && r / 1000 == 16, "argc of 20 words: %d", r );
+			PluginVM_Free( vm );
+		}
+		vm = Load( 0 );
+		if ( vm ) {
+			// the middle of a function is not the start of one
+			CHECK( !ODFT_Call_PingHandler( vm, 5, 1, "x" ), "a handler in the middle of the code was called" );
 			PluginVM_Free( vm );
 		}
 	}

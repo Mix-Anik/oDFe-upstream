@@ -21,8 +21,9 @@ include/    odf_common.h, odfc.h, odfs.h, the type headers, the entry points (od
 sdk/        this folder
   odf-build.c    the program that builds a plugin; it has the compiler in itself (see below), Makefile builds it
   odf_lib.c      the C library: string.h, ctype.h, stdlib.h (strtol, strtof, qsort, rand), math.h, stdio.h (snprintf)
+  odf_json.[ch]  a JSON writer and reader;  odf_http.[ch]  HTTP requests with a callback (server plugins)
   libc/          the headers of that library
-  examples/      hello.c (client) and hello_server.c (server): the smallest plugins
+  examples/      hello.c (client), hello_server.c (server), hello_http.c (server, uses the libraries): the smallest plugins
   check.sh       a smoke test of a built odf-build (the CI runs it on every system)
 toolchain/  the compiler (lcc), its preprocessor and the assembler (q3asm), as in ioquake3: see toolchain/README.md
 ```
@@ -35,30 +36,31 @@ This is `examples/hello.c`:
 /* hello.c */
 #define ODF_PLUGIN_VERSION     "1.0"
 #define ODF_PLUGIN_DESCRIPTION "says hello"
-#define EXPORTS( X ) X(OnInit) X(OnCommand)
+#define EXPORTS( X ) X(OnInit)
 #include "odfc_entry.h"          /* defines vmMain; it has to come before the first function of the program */
-#include "odf_cmd.h"             /* AddCommand( name, handler ) */
 
 #include <stdio.h>
 
-static void CmdHello( void )
+/* A handler gets the words of the command line like main: "hello World" is argc 2, argv[0] "hello", argv[1] "World". */
+static void CmdHello( int argc, const char **argv )
 {
-	char text[64];
+	char text[96];
 
-	snprintf( text, sizeof( text ), "hello, %.1f seconds since the start", Milliseconds() / 1000.0f );
+	snprintf( text, sizeof( text ), "hello, %s! %.1f seconds since the start", argc > 1 ? argv[1] : "stranger", Milliseconds() / 1000.0f );
 	Print( text );
 }
 
 int OnInit( void )
 {
-	AddCommand( "hello", CmdHello );
+	CommandRegister( "hello", CmdHello );
 	return 0;                    /* not 0: the plugin is not loaded */
 }
 ```
 
-The functions of the engine (`Print`, `Milliseconds`, `CommandArgv` ...) are called by their plain names. The functions a
+The functions of the engine (`Print`, `Milliseconds`, `CvarString` ...) are called by their plain names. The functions a
 plugin implements for the engine to call (the exports) start with `On`: `OnInit`, `OnShutdown`, `OnDraw3D` ... The
-`EXPORTS( X )` line lists the ones the program has. If a function of your own has the name of an engine function or of an
+`EXPORTS( X )` line lists the ones the program has. For everything the engine calls later, because the plugin asked it to
+(a console command, an HTTP answer, an event), the plugin gives the engine a function: see *Handlers* below. If a function of your own has the name of an engine function or of an
 export, the linker says `Multiple definitions`: rename yours.
 
 Build it and put it in the `plugins` folder of the home path:
@@ -103,16 +105,35 @@ capabilities it needs, comma separated; it is not loaded when it was not given t
 entry header adds the API version the plugin was written for (a test of the engine can set `ODF_PLUGIN_API` to a string to
 pretend to be from another version).
 
-### A handler function for each command
+### Libraries
 
-The engine has one `OnCommand( name )` export for all the console commands of a plugin. `odf_cmd.h` is the usual
-implementation of it: include it once after the entry header and list `OnCommand` in the exports, as in the example above.
-`AddCommand( name, handler )` returns 0 when the engine refuses the name, the table (32 commands) is full or the handler is
-NULL. Inside a handler `CommandArgc` / `CommandArgv` give the arguments. Do not write `OnCommand` yourself then.
-`CommandRegister( name )` is the function of the engine that `AddCommand` calls; use it only with your own `OnCommand`.
+The SDK has libraries that a plugin uses by including their header: `odf_json.h` (a JSON writer and reader, `Jw_*` and `Json_*`)
+and `odf_http.h` (`Http_Get`, `Http_PostJSON`: a request, a callback with the status and the answer; server plugins). There is
+nothing to list on the command line: `odf-build` looks at the files the preprocessor read, and for every header
+`odf_<name>.h` of the SDK that has an `odf_<name>.c` beside it, that file is added to the program (also when the header is
+included by another library). A plugin that includes none of them gets none. See `examples/hello_http.c`. The libraries
+run inside the sandbox like the rest of the plugin: the engine never parses what a server answers.
 
-`odf_cmd.h` is for client plugins; a server plugin gets the `!commands` of players through the `chat_command` event.
-(`tests/client_plugin/cmd_test.sh` tests it.)
+### Handlers
+
+Some engine functions take a function of the plugin, a *handler*, that the engine calls when something happens. The type of
+the handler is in the header (`odfcCommandHandler_t`, `odfsHttpHandler_t` ...) with the arguments the engine passes:
+
+```c
+static void CmdHello( int argc, const char **argv ) { Print( argc > 1 ? argv[1] : "hello" ); }
+CommandRegister( "hello", CmdHello );                 /* client: the console command "hello", like main( argc, argv ) */
+
+static void OnRank( int clientNum, int serial, const char *args ) { ... }
+ChatCommandRegister( "rank", OnRank );                /* server: "!rank vq3" in the chat */
+EventSubscribe( "player_finish", OnFinish );          /* server: an event, data is an info string */
+HttpRequest( ODF_HTTP_GET, url, NULL, NULL, 0, 5000, OnAnswer, myIndex );   /* server: myIndex comes back as userData */
+```
+
+Each of them returns 0 when the engine refuses (bad name, no handler, a capability the plugin does not have, too many).
+A console command handler gets the words of the command line like `main`: `argv[0]` is the name as typed, `argc` counts all of
+them (at most 16 words, each cut after 199 characters).
+A handler is an ordinary function; the engine can only call the ones the plugin gave it, and the VM only lets a call go to
+the start of a function. They are removed when the plugin stops. (`tests/client_plugin/cmd_test.sh` tests the commands.)
 
 ## What to know about the language
 

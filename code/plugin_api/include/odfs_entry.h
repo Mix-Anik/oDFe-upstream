@@ -43,10 +43,8 @@ The API version (1) is added by this header (ODF_PLUGIN_API, a string, overrides
 #define ODFS_BIT_OnShutdown	| ( 1 << 1 )
 #define ODFS_CASE_OnFrame	case 2: OnFrame( a[0] ); return 0;
 #define ODFS_BIT_OnFrame	| ( 1 << 2 )
-#define ODFS_CASE_OnEvent	case 3: OnEvent( (const char *)a[0], (const char *)a[1] ); return 0;
-#define ODFS_BIT_OnEvent	| ( 1 << 3 )
-#define ODFS_CASE_OnHttp	case 4: OnHttp( a[0], a[1], a[2] ); return 0;
-#define ODFS_BIT_OnHttp	| ( 1 << 4 )
+#define ODFS_HANDLER_CASES	case 3: ( (odfsEventHandler_t)a[0] )( (const char *)a[1] ); return 0; case 4: ( (odfsChatCommandHandler_t)a[0] )( a[1], a[2], (const char *)a[3] ); return 0; case 5: ( (odfsHttpHandler_t)a[0] )( a[1], a[2], a[3], a[4] ); return 0;
+#define ODFS_HANDLER_BITS	 | ( 1 << 3 ) | ( 1 << 4 ) | ( 1 << 5 )
 #define ODFS_X_CASE( name )	ODFS_CASE_##name
 #define ODFS_X_BIT( name )	ODFS_BIT_##name
 
@@ -67,8 +65,9 @@ int vmMain( int command, int ioAddress, int unused1, int unused2 )
 				"caps=" ODF_PLUGIN_CAPS "\n"
 				"description=" ODF_PLUGIN_DESCRIPTION );
 		case ODF_CMD_EXPORTS:
-			return 0 EXPORTS( ODFS_X_BIT );
+			return 0 EXPORTS( ODFS_X_BIT ) ODFS_HANDLER_BITS;
 		EXPORTS( ODFS_X_CASE )
+		ODFS_HANDLER_CASES
 	}
 	return 0;
 }

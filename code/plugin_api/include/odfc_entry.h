@@ -49,12 +49,12 @@ The API version (1) is added by this header (ODF_PLUGIN_API, a string, overrides
 #define ODFC_BIT_OnDraw3D	| ( 1 << 4 )
 #define ODFC_CASE_OnDraw2D	case 5: OnDraw2D( a[0] ); return 0;
 #define ODFC_BIT_OnDraw2D	| ( 1 << 5 )
-#define ODFC_CASE_OnCommand	case 6: OnCommand( (const char *)a[0] ); return 0;
-#define ODFC_BIT_OnCommand	| ( 1 << 6 )
-#define ODFC_CASE_OnFilterSound	case 7: return OnFilterSound( a[0], a[1], a[2], a[3] );
-#define ODFC_BIT_OnFilterSound	| ( 1 << 7 )
-#define ODFC_CASE_OnDemoSeek	case 8: OnDemoSeek( a[0], a[1] ); return 0;
-#define ODFC_BIT_OnDemoSeek	| ( 1 << 8 )
+#define ODFC_CASE_OnFilterSound	case 6: return OnFilterSound( a[0], a[1], a[2], a[3] );
+#define ODFC_BIT_OnFilterSound	| ( 1 << 6 )
+#define ODFC_CASE_OnDemoSeek	case 7: OnDemoSeek( a[0], a[1] ); return 0;
+#define ODFC_BIT_OnDemoSeek	| ( 1 << 7 )
+#define ODFC_HANDLER_CASES	case 8: ( (odfcCommandHandler_t)a[0] )( a[1], (const char **)a[2] ); return 0;
+#define ODFC_HANDLER_BITS	 | ( 1 << 8 )
 #define ODFC_X_CASE( name )	ODFC_CASE_##name
 #define ODFC_X_BIT( name )	ODFC_BIT_##name
 
@@ -75,8 +75,9 @@ int vmMain( int command, int ioAddress, int unused1, int unused2 )
 				"caps=" ODF_PLUGIN_CAPS "\n"
 				"description=" ODF_PLUGIN_DESCRIPTION );
 		case ODF_CMD_EXPORTS:
-			return 0 EXPORTS( ODFC_X_BIT );
+			return 0 EXPORTS( ODFC_X_BIT ) ODFC_HANDLER_BITS;
 		EXPORTS( ODFC_X_CASE )
+		ODFC_HANDLER_CASES
 	}
 	return 0;
 }

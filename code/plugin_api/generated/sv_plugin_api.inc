@@ -11,7 +11,7 @@
 static const char *const odfs_capNames[] = { "chat", "auth", "ips", "http", "storage", "rawcmd" };
 #define ODFS_NUM_CAPS	6
 
-#define ODFS_NUM_IMPORTS	22
+#define ODFS_NUM_IMPORTS	24
 
 // The functions the engine implements, written by hand. The host also has to define
 //   static qboolean ODF_CheatsAllowed( void );   the rule for the functions marked cheat
@@ -30,8 +30,10 @@ static void Imp_MemSet( char *dst, int value, int size );
 static void Imp_MemCpy( char *dst, const char *src, int size );
 static int Imp_GetClientInfo( int clientNum, odfClientInfo_t *out );
 static void Imp_SendServerCommand( int clientNum, const char *command );
+static int Imp_EventSubscribe( const char *name, int handler );
+static int Imp_ChatCommandRegister( const char *name, int handler );
 static void Imp_AuthResult( int clientNum, int serial, int result, int64_t accountID, const char *accountName, const char *reason );
-static int Imp_HttpRequest( int method, const char *url, const char *headers, const char *body, int bodyLen, int timeoutMs );
+static int Imp_HttpRequest( int method, const char *url, const char *headers, const char *body, int bodyLen, int timeoutMs, int handler, int userData );
 static int Imp_HttpBody( int id, int offset, char *out, int outSize );
 static int Imp_StoreRead( const char *name, int offset, char *out, int outSize );
 static int Imp_StoreWrite( const char *name, const char *data, int len, int append );
@@ -165,7 +167,21 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 			Imp_SendServerCommand( (int)args[1], p_command );
 			return 0;
 		}
-		case 15: {		// AuthResult
+		case 15: {		// EventSubscribe
+			const char * p_name = NULL;
+			PluginVM_String( vm, args[1], qfalse, &p_name );
+			return Imp_EventSubscribe( p_name, (int)args[2] );
+		}
+		case 16: {		// ChatCommandRegister
+			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_chat ) ) {
+				PluginVM_Denied( vm, "ChatCommandRegister", "chat" );
+				return 0;
+			}
+			const char * p_name = NULL;
+			PluginVM_String( vm, args[1], qfalse, &p_name );
+			return Imp_ChatCommandRegister( p_name, (int)args[2] );
+		}
+		case 17: {		// AuthResult
 			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_auth ) ) {
 				PluginVM_Denied( vm, "AuthResult", "auth" );
 				return 0;
@@ -177,7 +193,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 			Imp_AuthResult( (int)args[1], (int)args[2], (int)args[3], (int64_t)( ( (uint64_t)(uint32_t)args[5] << 32 ) | (uint32_t)args[4] ), p_accountName, p_reason );
 			return 0;
 		}
-		case 16: {		// HttpRequest
+		case 18: {		// HttpRequest
 			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_http ) ) {
 				PluginVM_Denied( vm, "HttpRequest", "http" );
 				return 0;
@@ -194,9 +210,9 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 			if ( args[5] != 0 ) {
 				PluginVM_Ptr( vm, args[4], (unsigned)args[5] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qtrue, (void **)&p_body );
 			}
-			return Imp_HttpRequest( (int)args[1], p_url, p_headers, p_body, (int)args[5], (int)args[6] );
+			return Imp_HttpRequest( (int)args[1], p_url, p_headers, p_body, (int)args[5], (int)args[6], (int)args[7], (int)args[8] );
 		}
-		case 17: {		// HttpBody
+		case 19: {		// HttpBody
 			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_http ) ) {
 				PluginVM_Denied( vm, "HttpBody", "http" );
 				return 0;
@@ -211,7 +227,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 			}
 			return Imp_HttpBody( (int)args[1], (int)args[2], p_out, (int)args[4] );
 		}
-		case 18: {		// StoreRead
+		case 20: {		// StoreRead
 			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_storage ) ) {
 				PluginVM_Denied( vm, "StoreRead", "storage" );
 				return 0;
@@ -228,7 +244,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 			}
 			return Imp_StoreRead( p_name, (int)args[2], p_out, (int)args[4] );
 		}
-		case 19: {		// StoreWrite
+		case 21: {		// StoreWrite
 			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_storage ) ) {
 				PluginVM_Denied( vm, "StoreWrite", "storage" );
 				return 0;
@@ -245,7 +261,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 			}
 			return Imp_StoreWrite( p_name, p_data, (int)args[3], (int)args[4] );
 		}
-		case 20: {		// StoreSize
+		case 22: {		// StoreSize
 			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_storage ) ) {
 				PluginVM_Denied( vm, "StoreSize", "storage" );
 				return 0;
@@ -254,7 +270,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 			PluginVM_String( vm, args[1], qfalse, &p_name );
 			return Imp_StoreSize( p_name );
 		}
-		case 21: {		// StoreDelete
+		case 23: {		// StoreDelete
 			if ( !( PluginVM_Caps( vm ) & ODFS_CAP_storage ) ) {
 				PluginVM_Denied( vm, "StoreDelete", "storage" );
 				return 0;
@@ -273,13 +289,14 @@ enum {
 	ODFS_EXP_OnInit,
 	ODFS_EXP_OnShutdown,
 	ODFS_EXP_OnFrame,
-	ODFS_EXP_OnEvent,
-	ODFS_EXP_OnHttp,
+	ODFS_EXP_EventHandler,
+	ODFS_EXP_ChatCommandHandler,
+	ODFS_EXP_HttpHandler,
 	ODFS_NUM_EXPORTS
 };
-static const char *const odfs_exportNames[] = { "OnInit", "OnShutdown", "OnFrame", "OnEvent", "OnHttp" };
+static const char *const odfs_exportNames[] = { "OnInit", "OnShutdown", "OnFrame", "EventHandler", "ChatCommandHandler", "HttpHandler" };
 // capability an export needs to be called (0 = none)
-static const unsigned odfs_exportCaps[] = { 0, 0, 0, 0, 0 };
+static const unsigned odfs_exportCaps[] = { 0, 0, 0, 0, 0, 0 };
 
 static qboolean ODFS_Call_OnInit( pluginVM_t *w, int *result )
 {
@@ -320,53 +337,76 @@ static qboolean ODFS_Call_OnFrame( pluginVM_t *w, int a_serverTime )
 	return PluginVM_Call( w, ODFS_EXP_OnFrame, args, 1, NULL, PLUGIN_VM_BUDGET_FRAME );
 }
 
-static qboolean ODFS_Call_OnEvent( pluginVM_t *w, const char *a_name, const char *a_data )
+static qboolean ODFS_Call_EventHandler( pluginVM_t *w, int a_handler, const char *a_data )
 {
 	int args[8];
 	unsigned o;
 	(void)o;
-	if ( !PluginVM_Has( w, ODFS_EXP_OnEvent ) ) {
+	if ( !PluginVM_Has( w, ODFS_EXP_EventHandler ) ) {
 		return qtrue;
 	}
 	PluginVM_IOBegin( w );
-	o = PluginVM_IOPutString( w, a_name );
-	if ( !o ) {
-		PluginVM_Fail( w, "the arguments of OnEvent do not fit the io buffer" );
-		return qfalse;
-	}
+	o = (unsigned)a_handler;
 	args[0] = (int)o;
 	o = PluginVM_IOPutString( w, a_data );
 	if ( !o ) {
-		PluginVM_Fail( w, "the arguments of OnEvent do not fit the io buffer" );
+		PluginVM_Fail( w, "the arguments of EventHandler do not fit the io buffer" );
 		return qfalse;
 	}
 	args[1] = (int)o;
-	return PluginVM_Call( w, ODFS_EXP_OnEvent, args, 2, NULL, PLUGIN_VM_BUDGET_FRAME );
+	return PluginVM_Call( w, ODFS_EXP_EventHandler, args, 2, NULL, PLUGIN_VM_BUDGET_FRAME );
 }
 
-static qboolean ODFS_Call_OnHttp( pluginVM_t *w, int a_id, int a_status, int a_bodyLen )
+static qboolean ODFS_Call_ChatCommandHandler( pluginVM_t *w, int a_handler, int a_clientNum, int a_serial, const char *a_args )
 {
 	int args[8];
 	unsigned o;
 	(void)o;
-	if ( !PluginVM_Has( w, ODFS_EXP_OnHttp ) ) {
+	if ( !PluginVM_Has( w, ODFS_EXP_ChatCommandHandler ) ) {
 		return qtrue;
 	}
 	PluginVM_IOBegin( w );
-	o = (unsigned)a_id;
+	o = (unsigned)a_handler;
 	args[0] = (int)o;
-	o = (unsigned)a_status;
+	o = (unsigned)a_clientNum;
 	args[1] = (int)o;
-	o = (unsigned)a_bodyLen;
+	o = (unsigned)a_serial;
 	args[2] = (int)o;
-	return PluginVM_Call( w, ODFS_EXP_OnHttp, args, 3, NULL, PLUGIN_VM_BUDGET_FRAME );
+	o = PluginVM_IOPutString( w, a_args );
+	if ( !o ) {
+		PluginVM_Fail( w, "the arguments of ChatCommandHandler do not fit the io buffer" );
+		return qfalse;
+	}
+	args[3] = (int)o;
+	return PluginVM_Call( w, ODFS_EXP_ChatCommandHandler, args, 4, NULL, PLUGIN_VM_BUDGET_FRAME );
+}
+
+static qboolean ODFS_Call_HttpHandler( pluginVM_t *w, int a_handler, int a_id, int a_status, int a_bodyLen, int a_userData )
+{
+	int args[8];
+	unsigned o;
+	(void)o;
+	if ( !PluginVM_Has( w, ODFS_EXP_HttpHandler ) ) {
+		return qtrue;
+	}
+	PluginVM_IOBegin( w );
+	o = (unsigned)a_handler;
+	args[0] = (int)o;
+	o = (unsigned)a_id;
+	args[1] = (int)o;
+	o = (unsigned)a_status;
+	args[2] = (int)o;
+	o = (unsigned)a_bodyLen;
+	args[3] = (int)o;
+	o = (unsigned)a_userData;
+	args[4] = (int)o;
+	return PluginVM_Call( w, ODFS_EXP_HttpHandler, args, 5, NULL, PLUGIN_VM_BUDGET_FRAME );
 }
 
 // events and the capability that is needed to get them (0 = none)
 static const struct { const char *name; unsigned cap; } odfs_eventCaps[] = {
 	{ "player_finish", 0 },
 	{ "auth_response", ODFS_CAP_auth },
-	{ "chat_command", ODFS_CAP_chat },
 	{ "client_disconnect", 0 },
 	{ "map_begin", 0 },
 };

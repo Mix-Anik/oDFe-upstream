@@ -19,7 +19,7 @@ call (engine functions) and what it can implement for the engine to call (export
 
 // Capabilities. A plugin that needs a group says so in its manifest (caps=a,b); it is only loaded when it was given
 // them, and a call of a function of a group it does not have stops the plugin.
-//   chat       receives the "!command" chat messages of players (event chat_command)
+//   chat       gets the "!command" chat messages of players (ChatCommandRegister)
 //   auth       (restricted) answers the logins of players: gets the signatures (event auth_response) and tells the engine who is logged in
 //   ips        (restricted) sees the IP addresses of players
 //   http       (restricted) makes HTTP requests, only to the hosts the operator listed (http=host1|host2)
@@ -27,6 +27,24 @@ call (engine functions) and what it can implement for the engine to call (export
 //   rawcmd     (restricted) sends any server command to clients, not only print, cp and chat
 // A function marked 'cheats only' does nothing and returns 0 unless cheats are allowed (see CheatsEnabled): the engine
 // decides, not the plugin.
+
+// ---------------------------------------------------------------------------
+// Handlers: functions of the plugin that it gives to the engine (as an argument of one of the functions below).
+// The engine calls them with exactly these arguments. A handler is an ordinary function with this prototype.
+// ---------------------------------------------------------------------------
+
+// An event the plugin subscribed to happened. data is a Quake info string: \key\value\key\value (at most 1023 characters, keys
+// and values never contain backslashes or quotes). The events are listed below.
+typedef void ( *odfsEventHandler_t )( const char *data );
+
+// A player typed a chat command. clientNum and serial are the slot and its connection counter (the same as in the events), args
+// is what follows the command, without the spaces around it ("vq3" for "!top vq3"), at most 200 characters.
+typedef void ( *odfsChatCommandHandler_t )( int clientNum, int serial, const char *args );
+
+// A request made with HttpRequest finished. id is the number HttpRequest returned and userData the value that was passed with
+// it. status is the HTTP status, or 0 if it failed before an answer (timeout, host not reachable, answer too large); bodyLen is
+// the size of the answer, read it with HttpBody while the handler runs.
+typedef void ( *odfsHttpHandler_t )( int id, int status, int bodyLen, int userData );
 
 
 // Writes a line to the server console and log, prefixed with the plugin name.
@@ -73,6 +91,18 @@ int GetClientInfo( int clientNum, odfClientInfo_t *out );
 // Other commands need the capability rawcmd.
 void SendServerCommand( int clientNum, const char *command );
 
+// Calls handler for every event with this name (lower case letters, digits and _) from now on. A plugin can subscribe to an
+// event more than once with different handlers; they run in the order of the subscriptions. Returns 0 when the name is invalid,
+// handler is NULL, the plugin has too many subscriptions or the event needs a capability the plugin does not have.
+int EventSubscribe( const char *name, odfsEventHandler_t handler );
+
+// Calls handler when a player says "!name" or "!name arguments" in the chat (name is lower case letters, digits and _, up to 31
+// long, compared without regard to case). The game still gets the message and shows it like any other. Not called for bots, nor
+// for messages with control characters, a backslash, a double quote or a semicolon. Several plugins (and one plugin more than
+// once) can have the same name. Returns 0 when the name is invalid, handler is NULL or the plugin has too many chat commands.
+// Capability: chat
+int ChatCommandRegister( const char *name, odfsChatCommandHandler_t handler );
+
 // Answers an "auth_response" event. clientNum and serial are the values from the event; if the client has disconnected in the
 // meantime (serial no longer matches) the call is ignored. accountID and accountName are used for ODF_AUTHRES_OK. reason is a
 // short word without spaces ("bad_signature", "banned", ...) shown to the player for REJECTED, and may be NULL.
@@ -80,12 +110,14 @@ void SendServerCommand( int clientNum, const char *command );
 void AuthResult( int clientNum, int serial, int result, unsigned accountIDLo, unsigned accountIDHi, const char *accountName, const char *reason );
 
 // Starts a request and returns its id (1 or more), or 0 if it could not be started (host not allowed, too many requests,
-// bad arguments). method is ODF_HTTP_GET or ODF_HTTP_POST. headers is "Name: value" lines separated by \n (only Authorization,
-// Content-Type and Accept are sent), may be NULL. The result arrives later in the export OnHttp. Nothing blocks.
+// handler is NULL, bad arguments). method is ODF_HTTP_GET or ODF_HTTP_POST. headers is "Name: value" lines separated by \n (only
+// Authorization, Content-Type and Accept are sent), may be NULL. When the request is done, handler( id, status, bodyLen,
+// userData ) is called in a later frame; userData is any number of the plugin's (an index into its own table, for example).
+// Nothing blocks.
 // Capability: http
-int HttpRequest( int method, const char *url, const char *headers, const void *body, int bodyLen, int timeoutMs );
+int HttpRequest( int method, const char *url, const char *headers, const void *body, int bodyLen, int timeoutMs, odfsHttpHandler_t handler, int userData );
 
-// Copies a piece of the answer to out, from byte offset on, while OnHttp runs. Returns the number of bytes copied.
+// Copies a piece of the answer to out, from byte offset on, while the handler of the request runs. Returns the number of bytes copied.
 // Capability: http
 int HttpBody( int id, int offset, void *out, int outSize );
 
@@ -122,13 +154,5 @@ void OnShutdown( void );
 
 // Called every server frame. serverTime is the server's time (as for the game).
 void OnFrame( int serverTime );
-
-// Called for every event the plugin is allowed to get. data is a Quake info string: \key\value\key\value (at most 1023
-// characters, keys and values never contain backslashes or quotes).
-void OnEvent( const char *name, const char *data );
-
-// A request made with HttpRequest finished. status is the HTTP status, or 0 if it failed before an answer (timeout, host not
-// reachable, answer too large); bodyLen is the size of the answer, read it with HttpBody.
-void OnHttp( int id, int status, int bodyLen );
 
 #endif // ODFS_H

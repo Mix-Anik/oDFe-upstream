@@ -35,8 +35,8 @@ OBJECTS := $(patsubst $(TOOLS)/lcc/cpp/%.c,$(OBJ)/cpp/%.o,$(CPP_SRC)) \
            $(patsubst $(TOOLS)/asm/%.c,$(OBJ)/asm/%.o,$(ASM_SRC)) \
            $(OBJ)/odf-build.o $(OBJ)/sdkdata.o
 
-# the files the program carries; they are written out when it builds a plugin
-SDKFILES := $(wildcard $(ROOT)/include/*) $(wildcard $(ROOT)/sdk/libc/*.h) $(ROOT)/sdk/odf_lib.c $(ROOT)/sdk/odf_cmd.h $(ROOT)/sdk/odf_api.h
+# the files the program carries; they are written out when it builds a plugin (odf_lib.c, the libraries odf_json.[ch] ...)
+SDKFILES := $(wildcard $(ROOT)/include/*) $(wildcard $(ROOT)/sdk/libc/*.h) $(wildcard $(ROOT)/sdk/odf_*.c $(ROOT)/sdk/odf_*.h)
 
 .PHONY: all clean
 

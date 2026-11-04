@@ -138,8 +138,11 @@ jobs:
     - name: SDK library in the VM
       run: sh tests/plugin_sdk/run.sh
 
-    - name: Command helper in the client host
+    - name: Command handlers in the client host
       run: sh tests/client_plugin/cmd_test.sh
+
+    - name: Libraries of the SDK (JSON, HTTP)
+      run: sh tests/sdk_libs/run.sh
 
   # the same programs have to give the same plugin files on all systems
   same-everywhere:

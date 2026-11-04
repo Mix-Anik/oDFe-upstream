@@ -109,13 +109,14 @@ import DrawModel( x: f32, y: f32, w: f32, h: f32, model: i32, origin: in(float,3
 # console commands
 # ---------------------------------------------------------------------------
 
-# Adds a console command (lower case letters, digits and _, up to 31 long) that calls the plugin's command export. Returns 0
-# when the name is invalid or already used by the engine or another plugin. Commands are removed when the plugin stops.
-import CommandRegister( name: str ) -> i32 cap command
+# The function of the plugin that runs a console command, like main: argv[0] is the name as it was typed, the others are the
+# arguments, argc counts all of them. At most 16 are passed (the rest is dropped) and each is cut after 199 characters.
+handler CommandHandler( argc: i32, argv: strv(argc) )
 
-# The arguments of the command being run (in command): the count, and argument n (0 is the name) copied to out.
-import CommandArgc() -> i32 cap command
-import CommandArgv( n: i32, out: outstr(outSize), outSize: i32 ) cap command
+# Adds a console command (lower case letters, digits and _, up to 31 long) that calls handler when it is entered. Returns 0 when
+# the name is invalid, handler is NULL or the name is already used by the engine or another plugin. Commands are removed when
+# the plugin stops.
+import CommandRegister( name: str, handler: fn(CommandHandler) ) -> i32 cap command
 
 # ---------------------------------------------------------------------------
 # what the plugin offers the engine
@@ -139,10 +140,6 @@ export OnDraw3D( view: in(odfcView_t) )
 
 # Called twice per frame, with an ODFC_DRAW2D_* phase.
 export OnDraw2D( phase: i32 )
-
-# A command registered with CommandRegister was entered in the console; the arguments are available through CommandArgc and
-# CommandArgv.
-export OnCommand( name: str )
 
 # Called for every sound the game module starts on an entity or loops on one. Return non-zero to drop the sound. entityNum is
 # the entity (1023 is the world), isLoop whether it is a looping sound, entityClientNum the clientNum field of that entity in the

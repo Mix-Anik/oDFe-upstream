@@ -20,7 +20,7 @@ extern int stSoundCalls;
 extern int numAddedCommands;
 extern char addedCommands[32][32];
 extern xcommand_t addedCommandFn[32];
-extern char stCmdArgs[8][64];
+extern char stCmdArgs[24][256];
 extern int stCmdArgc;
 extern int stCvarFlagsLast;
 extern int stTraceCalls;
