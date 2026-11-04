@@ -477,13 +477,14 @@ ifdef MINGW
   ifeq ($(USE_CURL),1)
     BASE_CFLAGS += -I$(MOUNT_DIR)/libcurl/windows/include
     ifeq ($(ARCH),x86)
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib32
+      CURL_LIBDIR = $(MOUNT_DIR)/libcurl/windows/mingw/lib32
     else
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib64
+      CURL_LIBDIR = $(MOUNT_DIR)/libcurl/windows/mingw/lib64
     endif
+    CLIENT_LDFLAGS += -L$(CURL_LIBDIR)
     CLIENT_LDFLAGS += -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32
     # the dedicated server makes HTTP requests for its plugins
-    SERVER_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib64 -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32 -lwldap32 -lbcrypt
+    SERVER_LDFLAGS += -L$(CURL_LIBDIR) -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32 -lwldap32 -lbcrypt
   endif
 
   ifeq ($(USE_PCRE2),1)
@@ -642,6 +643,7 @@ else
   ifeq ($(USE_CURL),1)
     ifeq ($(USE_CURL_DLOPEN),0)
       CLIENT_LDFLAGS += -lcurl
+      SERVER_LDFLAGS += -lcurl
     endif
   endif
 

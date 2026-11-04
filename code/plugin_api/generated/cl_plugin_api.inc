@@ -1,5 +1,13 @@
 /* Generated from client.api by gen_api.py - do not edit. */
 
+#ifndef ODF_ALIGNOF
+#ifdef _MSC_VER
+#define ODF_ALIGNOF	__alignof
+#else
+#define ODF_ALIGNOF	__alignof__
+#endif
+#endif
+
 #define ODFC_API_VERSION	1
 #define ODFC_CAP_world	( 1u << 0 )
 #define ODFC_CAP_draw	( 1u << 1 )
@@ -90,7 +98,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_out );
+				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_out );
 			}
 			Imp_CvarString( p_name, p_out, (int)args[3] );
 			return 0;
@@ -127,7 +135,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_dst );
+				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_dst );
 			}
 			Imp_MemSet( p_dst, (int)args[2], (int)args[3] );
 			return 0;
@@ -140,14 +148,14 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_dst );
+				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_dst );
 			}
 			if ( (uint32_t)args[3] > 1048576 ) {
 				PluginVM_Trap( vm, "bad size passed to the engine" );
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_src );
+				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_src );
 			}
 			Imp_MemCpy( p_dst, p_src, (int)args[3] );
 			return 0;
@@ -158,7 +166,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			odfcSnapshot_t * p_out = NULL;
-			PluginVM_Ptr( vm, args[1], sizeof( odfcSnapshot_t ), __alignof__( odfcSnapshot_t ) < 4 ? __alignof__( odfcSnapshot_t ) : 4, qfalse, (void **)&p_out );
+			PluginVM_Ptr( vm, args[1], sizeof( odfcSnapshot_t ), ODF_ALIGNOF( odfcSnapshot_t ) < 4 ? ODF_ALIGNOF( odfcSnapshot_t ) : 4, qfalse, (void **)&p_out );
 			return Imp_GetSnapshot( p_out );
 		}
 		case 14: {		// Trace
@@ -171,11 +179,11 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			const float * p_mins = NULL;
 			const float * p_maxs = NULL;
 			const float * p_end = NULL;
-			PluginVM_Ptr( vm, args[1], sizeof( odfcTrace_t ), __alignof__( odfcTrace_t ) < 4 ? __alignof__( odfcTrace_t ) : 4, qfalse, (void **)&p_out );
-			PluginVM_Ptr( vm, args[2], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qfalse, (void **)&p_start );
-			PluginVM_Ptr( vm, args[3], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qtrue, (void **)&p_mins );
-			PluginVM_Ptr( vm, args[4], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qtrue, (void **)&p_maxs );
-			PluginVM_Ptr( vm, args[5], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qfalse, (void **)&p_end );
+			PluginVM_Ptr( vm, args[1], sizeof( odfcTrace_t ), ODF_ALIGNOF( odfcTrace_t ) < 4 ? ODF_ALIGNOF( odfcTrace_t ) : 4, qfalse, (void **)&p_out );
+			PluginVM_Ptr( vm, args[2], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qfalse, (void **)&p_start );
+			PluginVM_Ptr( vm, args[3], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qtrue, (void **)&p_mins );
+			PluginVM_Ptr( vm, args[4], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qtrue, (void **)&p_maxs );
+			PluginVM_Ptr( vm, args[5], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qfalse, (void **)&p_end );
 			Imp_Trace( p_out, p_start, p_mins, p_maxs, p_end, (int)args[6] );
 			return 0;
 		}
@@ -185,7 +193,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			odfcPlayerState_t * p_out = NULL;
-			PluginVM_Ptr( vm, args[1], sizeof( odfcPlayerState_t ), __alignof__( odfcPlayerState_t ) < 4 ? __alignof__( odfcPlayerState_t ) : 4, qfalse, (void **)&p_out );
+			PluginVM_Ptr( vm, args[1], sizeof( odfcPlayerState_t ), ODF_ALIGNOF( odfcPlayerState_t ) < 4 ? ODF_ALIGNOF( odfcPlayerState_t ) : 4, qfalse, (void **)&p_out );
 			return Imp_GetPlayerState( p_out );
 		}
 		case 16: {		// GetMoveState
@@ -194,7 +202,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			odfcMoveState_t * p_out = NULL;
-			PluginVM_Ptr( vm, args[1], sizeof( odfcMoveState_t ), __alignof__( odfcMoveState_t ) < 4 ? __alignof__( odfcMoveState_t ) : 4, qfalse, (void **)&p_out );
+			PluginVM_Ptr( vm, args[1], sizeof( odfcMoveState_t ), ODF_ALIGNOF( odfcMoveState_t ) < 4 ? ODF_ALIGNOF( odfcMoveState_t ) : 4, qfalse, (void **)&p_out );
 			return Imp_GetMoveState( p_out );
 		}
 		case 17: {		// PointContents
@@ -203,7 +211,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			const float * p_point = NULL;
-			PluginVM_Ptr( vm, args[1], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qfalse, (void **)&p_point );
+			PluginVM_Ptr( vm, args[1], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qfalse, (void **)&p_point );
 			return Imp_PointContents( p_point );
 		}
 		case 18: {		// GetWeaponState
@@ -212,7 +220,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			odfcWeaponState_t * p_out = NULL;
-			PluginVM_Ptr( vm, args[1], sizeof( odfcWeaponState_t ), __alignof__( odfcWeaponState_t ) < 4 ? __alignof__( odfcWeaponState_t ) : 4, qfalse, (void **)&p_out );
+			PluginVM_Ptr( vm, args[1], sizeof( odfcWeaponState_t ), ODF_ALIGNOF( odfcWeaponState_t ) < 4 ? ODF_ALIGNOF( odfcWeaponState_t ) : 4, qfalse, (void **)&p_out );
 			return Imp_GetWeaponState( p_out );
 		}
 		case 19: {		// RegisterShader
@@ -253,7 +261,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[2] != 0 ) {
-				PluginVM_Ptr( vm, args[3], (unsigned)args[2] * sizeof( odfcPolyVert_t ), __alignof__( odfcPolyVert_t ) < 4 ? __alignof__( odfcPolyVert_t ) : 4, qfalse, (void **)&p_verts );
+				PluginVM_Ptr( vm, args[3], (unsigned)args[2] * sizeof( odfcPolyVert_t ), ODF_ALIGNOF( odfcPolyVert_t ) < 4 ? ODF_ALIGNOF( odfcPolyVert_t ) : 4, qfalse, (void **)&p_verts );
 			}
 			Imp_AddPoly( (int)args[1], (int)args[2], p_verts );
 			return 0;
@@ -266,9 +274,9 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			const float * p_from = NULL;
 			const float * p_to = NULL;
 			const unsigned char * p_rgba = NULL;
-			PluginVM_Ptr( vm, args[2], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qfalse, (void **)&p_from );
-			PluginVM_Ptr( vm, args[3], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qfalse, (void **)&p_to );
-			PluginVM_Ptr( vm, args[4], 4 * sizeof( unsigned char ), __alignof__( unsigned char ) < 4 ? __alignof__( unsigned char ) : 4, qfalse, (void **)&p_rgba );
+			PluginVM_Ptr( vm, args[2], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qfalse, (void **)&p_from );
+			PluginVM_Ptr( vm, args[3], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qfalse, (void **)&p_to );
+			PluginVM_Ptr( vm, args[4], 4 * sizeof( unsigned char ), ODF_ALIGNOF( unsigned char ) < 4 ? ODF_ALIGNOF( unsigned char ) : 4, qfalse, (void **)&p_rgba );
 			Imp_AddBeam( (int)args[1], p_from, p_to, p_rgba );
 			return 0;
 		}
@@ -278,7 +286,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			const float * p_rgba = NULL;
-			PluginVM_Ptr( vm, args[1], 4 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qtrue, (void **)&p_rgba );
+			PluginVM_Ptr( vm, args[1], 4 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qtrue, (void **)&p_rgba );
 			Imp_SetColor( p_rgba );
 			return 0;
 		}
@@ -297,8 +305,8 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			}
 			const float * p_origin = NULL;
 			const float * p_angles = NULL;
-			PluginVM_Ptr( vm, args[6], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qfalse, (void **)&p_origin );
-			PluginVM_Ptr( vm, args[7], 3 * sizeof( float ), __alignof__( float ) < 4 ? __alignof__( float ) : 4, qfalse, (void **)&p_angles );
+			PluginVM_Ptr( vm, args[6], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qfalse, (void **)&p_origin );
+			PluginVM_Ptr( vm, args[7], 3 * sizeof( float ), ODF_ALIGNOF( float ) < 4 ? ODF_ALIGNOF( float ) : 4, qfalse, (void **)&p_angles );
 			Imp_DrawModel( Odf_ArgFloat( args[1] ), Odf_ArgFloat( args[2] ), Odf_ArgFloat( args[3] ), Odf_ArgFloat( args[4] ), (int)args[5], p_origin, p_angles, (int)args[8] );
 			return 0;
 		}
@@ -397,7 +405,7 @@ static qboolean ODFC_Call_OnDraw3D( pluginVM_t *w, const odfcView_t *a_view )
 		return qtrue;
 	}
 	PluginVM_IOBegin( w );
-	o = PluginVM_IOPut( w, a_view, sizeof( odfcView_t ), __alignof__( odfcView_t ) < 4 ? __alignof__( odfcView_t ) : 4 );
+	o = PluginVM_IOPut( w, a_view, sizeof( odfcView_t ), ODF_ALIGNOF( odfcView_t ) < 4 ? ODF_ALIGNOF( odfcView_t ) : 4 );
 	if ( !o ) {
 		PluginVM_Fail( w, "the arguments of OnDraw3D do not fit the io buffer" );
 		return qfalse;

@@ -20,7 +20,7 @@ API=../../code/plugin_api/include
 INC="-I$C -I$Q -I$S -I$API"
 gcc -std=gnu11 -O2 -Wall -Wno-unused-function -Wno-array-bounds $INC -I. -o "$OUT/plugin_smoke" \
 	plugin_smoke.c stubs.c \
-	$C/cl_plugin.c $Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c 2>&1 | grep -v "^ \|^In \|note:\|inlined\|vm_optimize\|MOP_UNDEF" || true
+	$C/cl_plugin.c $Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c -lm 2>&1 | grep -v "^ \|^In \|note:\|inlined\|vm_optimize\|MOP_UNDEF" || true
 # a mode at a time: the fake engine keeps the cvars a plugin created, so a second start in the same process is not the first
 "$OUT/plugin_smoke" "$HOME_DIR" "$NAME" jit "$@"
 "$OUT/plugin_smoke" "$HOME_DIR" "$NAME" interp "$@"

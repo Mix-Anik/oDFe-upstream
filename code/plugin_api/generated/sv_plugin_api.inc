@@ -1,5 +1,13 @@
 /* Generated from server.api by gen_api.py - do not edit. */
 
+#ifndef ODF_ALIGNOF
+#ifdef _MSC_VER
+#define ODF_ALIGNOF	__alignof
+#else
+#define ODF_ALIGNOF	__alignof__
+#endif
+#endif
+
 #define ODFS_API_VERSION	1
 #define ODFS_CAP_chat	( 1u << 0 )
 #define ODFS_CAP_auth	( 1u << 1 )
@@ -81,7 +89,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[2] != 0 ) {
-				PluginVM_Ptr( vm, args[1], (unsigned)args[2] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_buf );
+				PluginVM_Ptr( vm, args[1], (unsigned)args[2] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_buf );
 			}
 			return Imp_RandomBytes( p_buf, (int)args[2] );
 		}
@@ -102,7 +110,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_out );
+				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_out );
 			}
 			Imp_CvarString( p_name, p_out, (int)args[3] );
 			return 0;
@@ -131,7 +139,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_dst );
+				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_dst );
 			}
 			Imp_MemSet( p_dst, (int)args[2], (int)args[3] );
 			return 0;
@@ -144,21 +152,21 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_dst );
+				PluginVM_Ptr( vm, args[1], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_dst );
 			}
 			if ( (uint32_t)args[3] > 1048576 ) {
 				PluginVM_Trap( vm, "bad size passed to the engine" );
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_src );
+				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_src );
 			}
 			Imp_MemCpy( p_dst, p_src, (int)args[3] );
 			return 0;
 		}
 		case 13: {		// GetClientInfo
 			odfClientInfo_t * p_out = NULL;
-			PluginVM_Ptr( vm, args[2], sizeof( odfClientInfo_t ), __alignof__( odfClientInfo_t ) < 4 ? __alignof__( odfClientInfo_t ) : 4, qfalse, (void **)&p_out );
+			PluginVM_Ptr( vm, args[2], sizeof( odfClientInfo_t ), ODF_ALIGNOF( odfClientInfo_t ) < 4 ? ODF_ALIGNOF( odfClientInfo_t ) : 4, qfalse, (void **)&p_out );
 			return Imp_GetClientInfo( (int)args[1], p_out );
 		}
 		case 14: {		// SendServerCommand
@@ -208,7 +216,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[5] != 0 ) {
-				PluginVM_Ptr( vm, args[4], (unsigned)args[5] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qtrue, (void **)&p_body );
+				PluginVM_Ptr( vm, args[4], (unsigned)args[5] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qtrue, (void **)&p_body );
 			}
 			return Imp_HttpRequest( (int)args[1], p_url, p_headers, p_body, (int)args[5], (int)args[6], (int)args[7], (int)args[8] );
 		}
@@ -223,7 +231,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[4] != 0 ) {
-				PluginVM_Ptr( vm, args[3], (unsigned)args[4] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_out );
+				PluginVM_Ptr( vm, args[3], (unsigned)args[4] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_out );
 			}
 			return Imp_HttpBody( (int)args[1], (int)args[2], p_out, (int)args[4] );
 		}
@@ -240,7 +248,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[4] != 0 ) {
-				PluginVM_Ptr( vm, args[3], (unsigned)args[4] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qfalse, (void **)&p_out );
+				PluginVM_Ptr( vm, args[3], (unsigned)args[4] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qfalse, (void **)&p_out );
 			}
 			return Imp_StoreRead( p_name, (int)args[2], p_out, (int)args[4] );
 		}
@@ -257,7 +265,7 @@ static intptr_t Odfs_Dispatch( pluginVM_t *vm, intptr_t *args )
 				return 0;
 			}
 			if ( args[3] != 0 ) {
-				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), __alignof__( char ) < 4 ? __alignof__( char ) : 4, qtrue, (void **)&p_data );
+				PluginVM_Ptr( vm, args[2], (unsigned)args[3] * sizeof( char ), ODF_ALIGNOF( char ) < 4 ? ODF_ALIGNOF( char ) : 4, qtrue, (void **)&p_data );
 			}
 			return Imp_StoreWrite( p_name, p_data, (int)args[3], (int)args[4] );
 		}

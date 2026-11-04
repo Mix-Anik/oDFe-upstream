@@ -240,9 +240,11 @@ static intptr_t PluginVM_Syscall( intptr_t *args )
 
 static int32_t RunVM( pluginVM_t *p, int32_t *args, int nargs )
 {
+#if ( idx64 || id386 ) && !defined( NO_VM_COMPILED )		// the only processors the plugin compiler exists for (see CompileOrPrepare)
 	if ( p->vm.compiled ) {
 		return VM_CallCompiled( &p->vm, nargs, args );
 	}
+#endif
 	return VM_CallInterpreted2( &p->vm, nargs, args );
 }
 

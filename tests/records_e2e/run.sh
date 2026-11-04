@@ -19,5 +19,5 @@ A=../server_auth
 gcc -O2 -Wall -Wno-unused-function -DDEDICATED -I$S -I$Q -I$API -I$A -o "$OUT/records_e2e" \
 	records_e2e.c $A/stubs.c \
 	$S/sv_auth.c $S/sv_plugin.c $Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c \
-	$Q/auth_proto.c $Q/monocypher.c $Q/monocypher-ed25519.c $Q/q_shared.c $Q/q_math.c
+	$Q/auth_proto.c $Q/monocypher.c $Q/monocypher-ed25519.c $Q/q_shared.c $Q/q_math.c -lm
 "$OUT/records_e2e" "$HOME_DIR"

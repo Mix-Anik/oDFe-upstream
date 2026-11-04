@@ -38,5 +38,5 @@ INC="-I$S -I$Q -I$API"
 gcc -O2 -Wall -Wno-unused-function -DDEDICATED -DODF_PLUGIN_TESTS $INC -I. -o "$OUT/server_auth_test" \
 	server_auth_test.c stubs.c \
 	$S/sv_auth.c $S/sv_plugin.c $Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c \
-	$Q/auth_proto.c $Q/monocypher.c $Q/monocypher-ed25519.c $Q/q_shared.c $Q/q_math.c
+	$Q/auth_proto.c $Q/monocypher.c $Q/monocypher-ed25519.c $Q/q_shared.c $Q/q_math.c -lm
 "$OUT/server_auth_test" "$HOME_DIR"

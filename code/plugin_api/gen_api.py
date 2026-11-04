@@ -488,6 +488,7 @@ def gen_inc(api, src):
     o = []
     o.append("/* Generated from %s by gen_api.py - do not edit. */\n" % src)
     ncaps = len(api.caps)
+    o.append("#ifndef ODF_ALIGNOF\n#ifdef _MSC_VER\n#define ODF_ALIGNOF\t__alignof\n#else\n#define ODF_ALIGNOF\t__alignof__\n#endif\n#endif\n")
     o.append("#define %s_API_VERSION	%d" % (U, api.version))
     for i, (name, restricted, text) in enumerate(api.caps):
         o.append("#define %s_CAP_%s\t( 1u << %d )" % (U, name, i))
@@ -536,15 +537,15 @@ def gen_inc(api, src):
             elif p.kind in ("ptrin", "ptrout"):
                 null = "qtrue" if p.nullable else "qfalse"
                 if p.count is None:
-                    o.append("\t\t\tPluginVM_Ptr( vm, args[%d], %s, __alignof__( %s ) < 4 ? __alignof__( %s ) : 4, %s, (void **)&p_%s );" % (
+                    o.append("\t\t\tPluginVM_Ptr( vm, args[%d], %s, ODF_ALIGNOF( %s ) < 4 ? ODF_ALIGNOF( %s ) : 4, %s, (void **)&p_%s );" % (
                         s, elem_size(p), p.ctype, p.ctype, null, nm))
                 elif isinstance(p.count, int):
-                    o.append("\t\t\tPluginVM_Ptr( vm, args[%d], %d * %s, __alignof__( %s ) < 4 ? __alignof__( %s ) : 4, %s, (void **)&p_%s );" % (
+                    o.append("\t\t\tPluginVM_Ptr( vm, args[%d], %d * %s, ODF_ALIGNOF( %s ) < 4 ? ODF_ALIGNOF( %s ) : 4, %s, (void **)&p_%s );" % (
                         s, p.count, elem_size(p), p.ctype, p.ctype, null, nm))
                 else:
                     c = "args[%d]" % slot[p.count]
                     o.append("\t\t\tif ( (uint32_t)%s > %d ) {\n\t\t\t\tPluginVM_Trap( vm, \"bad size passed to the engine\" );\n\t\t\t\treturn 0;\n\t\t\t}" % (c, MAX_COUNT))
-                    o.append("\t\t\tif ( %s != 0 ) {\n\t\t\t\tPluginVM_Ptr( vm, args[%d], (unsigned)%s * %s, __alignof__( %s ) < 4 ? __alignof__( %s ) : 4, %s, (void **)&p_%s );\n\t\t\t}" % (
+                    o.append("\t\t\tif ( %s != 0 ) {\n\t\t\t\tPluginVM_Ptr( vm, args[%d], (unsigned)%s * %s, ODF_ALIGNOF( %s ) < 4 ? ODF_ALIGNOF( %s ) : 4, %s, (void **)&p_%s );\n\t\t\t}" % (
                         c, s, c, elem_size(p), p.ctype, p.ctype, null, nm))
         cargs = []
         for p in f.params:
@@ -615,7 +616,7 @@ def gen_inc(api, src):
             elif p.kind == "str":
                 o.append("\to = PluginVM_IOPutString( w, a_%s );" % p.name)
             elif p.kind == "ptrin":
-                o.append("\to = PluginVM_IOPut( w, a_%s, sizeof( %s ), __alignof__( %s ) < 4 ? __alignof__( %s ) : 4 );" % (p.name, p.ctype, p.ctype, p.ctype))
+                o.append("\to = PluginVM_IOPut( w, a_%s, sizeof( %s ), ODF_ALIGNOF( %s ) < 4 ? ODF_ALIGNOF( %s ) : 4 );" % (p.name, p.ctype, p.ctype, p.ctype))
             else:
                 o.append("\to = (unsigned)a_%s;" % p.name)
                 o.append("\targs[%d] = (int)o;" % i)

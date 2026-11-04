@@ -422,8 +422,8 @@ int Json_Int( const char *v, int *out )
 		return 0;
 	}
 	n = strtol( v, &end, 10 );
-	if ( end == v || !EndsNumber( *end ) || n == LONG_MAX || n == LONG_MIN ) {
-		return 0;		/* not a number, or one that does not fit */
+	if ( end == v || !EndsNumber( *end ) || n == LONG_MAX || n == LONG_MIN || n > INT_MAX || n < INT_MIN ) {
+		return 0;		/* not a number, or one that does not fit (long has 64 bits on some hosts, 32 in the plugin VM) */
 	}
 	*out = (int)n;
 	return 1;

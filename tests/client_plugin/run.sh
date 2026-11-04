@@ -41,5 +41,5 @@ cp "$PLUGINS/mock.qvm" "$PLUGINS/bad name.qvm"
 INC="-I$C -I$Q -I$S -I$API"
 gcc -O2 -Wall -Wno-unused-function -DODF_PLUGIN_TESTS $INC -I. -o "$OUT/client_plugin_test" \
 	client_plugin_test.c stubs.c \
-	$C/cl_plugin.c $Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c
+	$C/cl_plugin.c $Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c -lm
 "$OUT/client_plugin_test" "$HOME_DIR"

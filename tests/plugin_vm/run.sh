@@ -18,5 +18,5 @@ esac
 
 gcc -O2 -g -Wall -Wno-unused-function -Wno-unused-variable -Wno-format-truncation $ARCH_FLAGS -I$Q -I. -o "$OUT/plugin_vm_test" \
 	harness.c stubs.c \
-	$Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c
+	$Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c -lm
 "$OUT/plugin_vm_test" "$OUT/plugin.qvm"

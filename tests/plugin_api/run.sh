@@ -18,5 +18,5 @@ $PYTHON $API/gen_api.py --api test.api "$OUT" > /dev/null
 
 gcc -O2 -g -Wall -Wno-unused-function -Wno-format-truncation -I$Q -I$API -I"$OUT/generated" -I. -I../plugin_vm -o "$OUT/plugin_api_test" \
 	harness.c ../plugin_vm/stubs.c \
-	$Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c
+	$Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c -lm
 "$OUT/plugin_api_test" "$OUT/plugin.qvm"

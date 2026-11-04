@@ -39,7 +39,8 @@ Build it with the Makefile of this folder.
 #include <dirent.h>
 #include <sys/wait.h>
 #ifdef __APPLE__
-#include <mach-o/dyld.h>
+/* declared here instead of including <mach-o/dyld.h>, which defines macros (SEG_DATA ...) that clash with names of this file */
+extern int _NSGetExecutablePath( char *buf, uint32_t *bufsize );
 #endif
 #define PATH_SEP '/'
 #define PATH_LIST_SEP ':'
@@ -805,7 +806,7 @@ static int nth_word( const char *s, size_t n, int index, const char **word, size
 	}
 }
 
-enum { SEG_NONE = -1, SEG_CODE, SEG_DATA, SEG_LIT, SEG_BSS };
+enum { ASMSEG_NONE = -1, ASMSEG_CODE, ASMSEG_DATA, ASMSEG_LIT, ASMSEG_BSS };
 
 static int segment_of( const char *t, size_t n )
 {
@@ -817,7 +818,7 @@ static int segment_of( const char *t, size_t n )
 			return i;
 		}
 	}
-	return SEG_NONE;
+	return ASMSEG_NONE;
 }
 
 /* Changes the 'lit' segments that hold addresses of data, not code, to 'data' (see fix_assembly). */
@@ -827,7 +828,7 @@ static void move_data_tables( buf_t *out, const char *text, size_t len )
 	line_t *lines = split_lines( text, len, &count );
 	set_t code_labels = { 0 };
 	char *to_data = (char *)xmalloc( count + 1 );
-	int segment = SEG_NONE;
+	int segment = ASMSEG_NONE;
 	long start = -1;
 	int data_address = 0;
 
@@ -839,13 +840,13 @@ static void move_data_tables( buf_t *out, const char *text, size_t len )
 
 		strip( &t, &tn );
 		seg = segment_of( t, tn );
-		if ( seg != SEG_NONE ) {
+		if ( seg != ASMSEG_NONE ) {
 			segment = seg;
 		} else if ( starts_with( t, tn, "proc " ) ) {
 			if ( nth_word( t, tn, 1, &w, &wn ) ) {
 				set_add( &code_labels, w, wn );
 			}
-		} else if ( segment == SEG_CODE && starts_with( t, tn, "LABELV " ) ) {
+		} else if ( segment == ASMSEG_CODE && starts_with( t, tn, "LABELV " ) ) {
 			if ( nth_word( t, tn, 1, &w, &wn ) ) {
 				set_add( &code_labels, w, wn );
 			}
@@ -855,7 +856,7 @@ static void move_data_tables( buf_t *out, const char *text, size_t len )
 	for ( i = 0; i <= count; i++ ) {
 		const char *t = NULL, *w;
 		size_t tn = 0, wn;
-		int seg = SEG_CODE;
+		int seg = ASMSEG_CODE;
 
 		if ( i < count ) {
 			t = lines[i].s;
@@ -863,11 +864,11 @@ static void move_data_tables( buf_t *out, const char *text, size_t len )
 			strip( &t, &tn );
 			seg = segment_of( t, tn );
 		}
-		if ( seg != SEG_NONE ) {
+		if ( seg != ASMSEG_NONE ) {
 			if ( start >= 0 && data_address ) {
 				to_data[start] = 1;
 			}
-			start = seg == SEG_LIT ? (long)i : -1;
+			start = seg == ASMSEG_LIT ? (long)i : -1;
 			data_address = 0;
 		} else if ( start >= 0 && starts_with( t, tn, "address " ) ) {
 			if ( nth_word( t, tn, 1, &w, &wn ) ) {
