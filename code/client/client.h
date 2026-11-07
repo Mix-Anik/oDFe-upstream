@@ -474,7 +474,7 @@ void CL_Auth_Init( void );
 qboolean CL_Auth_ServerCommand( const char *s );
 void CL_Auth_Disconnected( void );
 
-// cl_plugin.c - native client plugins (odf_client_plugin_api.h)
+// cl_plugin.c - sandboxed client plugins, see code/plugin_api/client.api
 void CL_Plugins_Init( void );
 void CL_Plugins_Shutdown( void );
 
@@ -489,7 +489,21 @@ int CL_Plugins_SetEnabled( const char *name, int enable );
 void CL_Plugins_Rescan( void );
 void CL_Plugins_CGameShutdown( void );
 void CL_Plugins_DemoSeek( int fromTime, int toTime );
+void CL_Plugins_BeforeFrame( void );
+// sv_state.c, the snapshots of the game behind the plugin API
+int SV_StateCreate( int owner );
+qboolean SV_StateCanApply( int handle );
+qboolean SV_StateApply( int handle );
+void SV_StateFree( int handle );
+void SV_StateFreeOwner( int owner );
+int SV_StateOwner( int handle );
+void CL_Plugins_StateSnapshot( void );
+void CL_Plugins_StateNotify( void );
+qboolean CLDemo_CgameSeekable( void );
 void CL_Plugins_SetPlayerState( const playerState_t *ps, int viewFlags );
+void CL_Plugins_SetGhostPath( int slot, int first, int count, const void *points, int complete );
+void CL_Plugins_SetGhostTime( int slot, int ms );
+void CL_Plugins_SetStatsTime( int serverTime );
 qboolean CL_Plugins_FilterSound( int entityNum, qboolean isLoop );
 void CL_Plugins_BeforeScene( const refdef_t *fd );
 void CL_Plugins_AfterScene( const refdef_t *fd );

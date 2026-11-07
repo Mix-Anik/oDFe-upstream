@@ -289,6 +289,7 @@
     <ClCompile Include="..\..\qcommon\q_math.c" />
     <ClCompile Include="..\..\qcommon\q_shared.c" />
     <ClCompile Include="..\..\qcommon\unzip.c" />
+    <ClCompile Include="..\..\qcommon\plugin_vm.c" />
     <ClCompile Include="..\..\qcommon\vm.c" />
     <ClCompile Include="..\..\qcommon\vm_aarch64.c">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
@@ -311,7 +312,7 @@
     <ClCompile Include="..\..\server\sv_main.c" />
     <ClCompile Include="..\..\server\sv_net_chan.c" />
     <ClCompile Include="..\..\server\sv_plugin.c" />
-    <ClCompile Include="..\..\server\sv_plugin_guard.c" />
+    <ClCompile Include="..\..\server\sv_http.c" />
     <ClCompile Include="..\..\server\sv_snapshot.c" />
     <ClCompile Include="..\..\server\sv_world.c" />
     <ClCompile Include="..\win_main.c" />

@@ -238,6 +238,11 @@ void CLDemo_CgameSupport( int version ) {
 }
 
 
+qboolean CLDemo_CgameSeekable( void ) {
+	return cgameSeekable;
+}
+
+
 void CLDemo_CgameShutdown( void ) {
 	cgameSeekable = qfalse;
 }

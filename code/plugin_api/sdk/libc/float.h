@@ -1,0 +1,11 @@
+#ifndef ODF_FLOAT_H
+#define ODF_FLOAT_H
+
+#define FLT_MAX 3.4028234e+38f
+#define FLT_MIN 1.175494351e-38f
+#define FLT_EPSILON 1.192092896e-07f
+#define DBL_MAX FLT_MAX
+#define DBL_MIN FLT_MIN
+#define DBL_EPSILON FLT_EPSILON
+
+#endif

@@ -222,9 +222,20 @@ struct vm_s {
 	qboolean	forceDataMask;
 
 	int			privateFlag;
+
+	// A plugin (plugin_vm.c): the compiled code counts down the int32 at dataBase - VM_METER_OFFSET and the interpreter
+	// counts instructions, and a division by zero is reported instead of crashing the process.
+	qboolean	metered;
 };
 
+#define VM_METER_OFFSET	8
+
+// Called when a program does something it must not (leaves its code, overflows its stack, runs out of its budget ...).
+// Does not return: it drops to the menu with an error, except for a plugin, which is stopped (plugin_vm.c).
+void VM_Fault( const char *reason );
+
 qboolean VM_Compile( vm_t *vm, vmHeader_t *header );
+void VM_CompileAbort( vm_t *vm );	// x86 only: after VM_Compile was left by VM_Fault
 int32_t VM_CallCompiled( vm_t *vm, int nargs, int32_t *args );
 
 qboolean VM_PrepareInterpreter2( vm_t *vm, vmHeader_t *header );

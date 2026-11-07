@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_cgame.c  -- client system interaction with client game
 
 #include "client.h"
+#include "../plugin_api/include/odfc_types.h"
 
 #include "../botlib/botlib.h"
 
@@ -456,6 +457,21 @@ static qboolean CL_GetValue( char* value, int valueSize, const char* key ) {
 		return qtrue;
 	}
 
+	if ( !Q_stricmp( key, "trap_ODF_GhostPath" ) ) {
+		Com_sprintf( value, valueSize, "%i", CG_ODF_GHOST_PATH );
+		return qtrue;
+	}
+
+	if ( !Q_stricmp( key, "trap_ODF_SetStatsTime" ) ) {
+		Com_sprintf( value, valueSize, "%i", CG_ODF_SET_STATSTIME );
+		return qtrue;
+	}
+
+	if ( !Q_stricmp( key, "trap_ODF_GhostTime" ) ) {
+		Com_sprintf( value, valueSize, "%i", CG_ODF_GHOST_TIME );
+		return qtrue;
+	}
+
 	if ( !Q_stricmp( key, "trap_Key_CapsLockOn_Q3E" ) ) {
 		Com_sprintf( value, valueSize, "%i", CG_KEY_CAPSLOCK_ON );
 		return qtrue;
@@ -868,6 +884,24 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		CLDemo_CgameSupport( args[1] );
 		return 0;
 
+	case CG_ODF_SET_STATSTIME:
+		CL_Plugins_SetStatsTime( args[1] );
+		return 0;
+
+	case CG_ODF_GHOST_TIME:
+		CL_Plugins_SetGhostTime( args[1], args[2] );
+		return 0;
+
+	case CG_ODF_GHOST_PATH:
+		if ( args[3] < 0 || args[3] > 4096 ) {
+			return 0;
+		}
+		if ( args[3] > 0 ) {
+			VM_CHECKBOUNDS( cgvm, args[4], args[3] * sizeof( odfcGhostPoint_t ) );
+		}
+		CL_Plugins_SetGhostPath( args[1], args[2], args[3], VMA(4), args[5] );
+		return 0;
+
 	default:
 		Com_Error( ERR_DROP, "Bad cgame system trap: %ld", (long int) args[0] );
 	}
@@ -1005,7 +1039,7 @@ CL_CGameRendering
 =====================
 */
 void CL_CGameTimeChange( int serverTime, int snapshotNum, int serverCommandSequence ) {
-	VM_Call( cgvm, 4, CG_ODF_TIME_CHANGE, serverTime, snapshotNum, serverCommandSequence );
+	VM_Call( cgvm, 3, CG_ODF_TIME_CHANGE, serverTime, snapshotNum, serverCommandSequence );
 }
 
 
@@ -1248,6 +1282,9 @@ void CL_SetCGameTime( void ) {
 	if ( !cl.snap.valid ) {
 		Com_Error( ERR_DROP, "CL_SetCGameTime: !cl.snap.valid" );
 	}
+
+	// a game snapshot was applied by a plugin: the clock went back to the first snapshot after it (CL_ParseSnapshot)
+	CL_Plugins_StateNotify();
 
 	// demo seek (cl_demoseek.c) feeds the skipped snapshots through the cgame
 	if ( clc.demoplaying && CLDemo_Frame() ) {

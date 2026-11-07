@@ -1,13 +1,11 @@
-/* a server plugin: exports ODF_PluginEntry and no ODF_ClientPluginEntry, so the client must not load it */
+/* A server plugin: it is built for the odfs API, so the client must not load it (and must not list it). */
 
-#ifdef _WIN32
-#define EXPORT __declspec( dllexport )
-#else
-#define EXPORT __attribute__( ( visibility( "default" ) ) )
-#endif
+#define ODF_PLUGIN_VERSION "server 1.0"
+#define EXPORTS( X ) X(OnInit)
+#include "odfs_entry.h"
 
-EXPORT const void *ODF_PluginEntry( const void *imp )
+int OnInit( void )
 {
-	(void)imp;
+	Print( "i am a server plugin" );
 	return 0;
 }

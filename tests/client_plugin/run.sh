@@ -1,39 +1,45 @@
 #!/bin/sh
 # Builds and runs the client plugin host test with the system gcc.
+# The mock plugins are QVM programs: they need q3lcc and q3asm (Q3TOOLS is the folder they are in).
 set -e
 cd "$(dirname "$0")"
 OUT=${OUT:-build}
 HOME_DIR="$OUT/home"
 PLUGINS="$HOME_DIR/plugins"
+Q3TOOLS=${Q3TOOLS:-/d/Other/Programming/C/oDFs/bin}
 mkdir -p "$PLUGINS"
-rm -f "$PLUGINS"/*.dll "$PLUGINS"/*.so "$PLUGINS/disabled"
+rm -f "$PLUGINS"/*.qvm "$PLUGINS/disabled"
+
 C=../../code/client
 Q=../../code/qcommon
 S=../../code/server
-INC="-I$C -I$Q -I$S"
+API=../../code/plugin_api/include
 
-case "$(uname -s)" in
-MINGW*|MSYS*)
-	EXT=dll
-	EXTRA=""
-	;;
-*)
-	EXT=so
-	EXTRA="-ldl"
-	;;
-esac
+# the two calls only the test build of the engine has come after the calls of the API
+N=$(grep -c '^equ' "$API/odfc_syscalls.asm")
+{ echo "code"; echo "equ TestPull -$((N + 1))"; echo "equ TestPush -$((N + 2))"; } > "$OUT/odfc_test.asm"
 
-PL="gcc -O2 -Wall -shared -fPIC -I$C -I. -include stdlib.h"
-$PL -o "$PLUGINS/mock.$EXT" mock_plugin.c
-$PL -DBAD_VERSION -o "$PLUGINS/badver.$EXT" mock_plugin.c
-$PL -DBAD_SIZE -o "$PLUGINS/badsize.$EXT" mock_plugin.c
-$PL -DREFUSE -o "$PLUGINS/refuse.$EXT" mock_plugin.c
-$PL -DOLD_EXPORTS -o "$PLUGINS/oldexp.$EXT" mock_plugin.c
-$PL -o "$PLUGINS/noentry.$EXT" noentry.c
+# build NAME SOURCE SYSCALLS [compiler options]
+build() {
+	name=$1; src=$2; sys=$3; shift 3
+	"$Q3TOOLS/q3lcc" -S -DQ3_VM "$@" -I$API -I. -o "$OUT/$name.asm" "$src"
+	"$Q3TOOLS/q3asm" -o "$PLUGINS/$name.qvm" "$OUT/$name.asm" $sys
+}
+
+SYS="$API/odfc_syscalls.asm $OUT/odfc_test.asm"
+build mock mock_plugin.c "$SYS"
+build badver mock_plugin.c "$SYS" -DBAD_VERSION '-DPFX="badver"'
+build refuse mock_plugin.c "$SYS" -DREFUSE '-DPFX="refuse"'
+build second mock_plugin.c "$SYS" -DSECOND '-DPFX="second"'
+build badimport badimport.c "$SYS"
+build noentry noentry.c "$API/odfs_syscalls.asm"
+build noio noio.c ""
 # a name that cannot be used (a space)
-cp "$PLUGINS/mock.$EXT" "$PLUGINS/bad name.$EXT"
+cp "$PLUGINS/mock.qvm" "$PLUGINS/bad name.qvm"
 
-gcc -O2 -Wall -Wno-unused-function $INC -I. -o "$OUT/client_plugin_test" \
+# ---- the host, with the real VM code of the engine ----
+INC="-I$C -I$Q -I$S -I$API"
+gcc -O2 -Wall -Wno-unused-function -DODF_PLUGIN_TESTS $INC -I. -o "$OUT/client_plugin_test" \
 	client_plugin_test.c stubs.c \
-	$C/cl_plugin.c $S/sv_plugin_guard.c $Q/q_shared.c $Q/q_math.c $EXTRA
+	$C/cl_plugin.c $Q/plugin_vm.c $Q/vm.c $Q/vm_x86.c $Q/vm_interpreted.c $Q/q_shared.c $Q/q_math.c -lm
 "$OUT/client_plugin_test" "$HOME_DIR"

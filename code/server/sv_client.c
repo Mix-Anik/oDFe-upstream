@@ -2232,6 +2232,15 @@ static void SV_UserMove( client_t *cl, msg_t *msg, qboolean delta ) {
 		return;
 	}
 
+	// a game snapshot was applied (sv_state.c): these usercmds carry the time of the old timeline until the client has
+	// acknowledged the first message of the new one
+	if ( cl->stateWait ) {
+		if ( cl->messageAcknowledge - cl->deltaStart < 0 ) {
+			return;
+		}
+		cl->stateWait = qfalse;
+	}
+
 	// usually, the first couple commands will be duplicates
 	// of ones we have previously received, but the servertimes
 	// in the commands will cause them to be immediately discarded

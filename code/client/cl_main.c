@@ -3010,6 +3010,8 @@ void CL_Frame( int msec, int realMsec ) {
 		return;
 	}
 
+	CL_Plugins_BeforeFrame();
+
 	// save the msec before checking pause
 	cls.realFrametime = realMsec;
 

@@ -477,11 +477,14 @@ ifdef MINGW
   ifeq ($(USE_CURL),1)
     BASE_CFLAGS += -I$(MOUNT_DIR)/libcurl/windows/include
     ifeq ($(ARCH),x86)
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib32
+      CURL_LIBDIR = $(MOUNT_DIR)/libcurl/windows/mingw/lib32
     else
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib64
+      CURL_LIBDIR = $(MOUNT_DIR)/libcurl/windows/mingw/lib64
     endif
+    CLIENT_LDFLAGS += -L$(CURL_LIBDIR)
     CLIENT_LDFLAGS += -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32
+    # the dedicated server makes HTTP requests for its plugins
+    SERVER_LDFLAGS += -L$(CURL_LIBDIR) -lcurl -Wl,-Bstatic -lz -Wl,-Bdynamic -lcrypt32 -lwldap32 -lbcrypt
   endif
 
   ifeq ($(USE_PCRE2),1)
@@ -640,6 +643,7 @@ else
   ifeq ($(USE_CURL),1)
     ifeq ($(USE_CURL_DLOPEN),0)
       CLIENT_LDFLAGS += -lcurl
+      SERVER_LDFLAGS += -lcurl
     endif
   endif
 
@@ -833,6 +837,7 @@ makedirs:
 	@if [ ! -d $(BUILD_DIR) ];then $(MKDIR) $(BUILD_DIR);fi
 	@if [ ! -d $(B) ];then $(MKDIR) $(B);fi
 	@if [ ! -d $(B)/client ];then $(MKDIR) $(B)/client/qvm;fi
+	@if [ ! -d $(B)/client/qvm ];then $(MKDIR) $(B)/client/qvm;fi
 	@if [ ! -d $(B)/client/jpeg ];then $(MKDIR) $(B)/client/jpeg;fi
 ifeq ($(USE_SYSTEM_OGG),0)
 	@if [ ! -d $(B)/client/ogg ];then $(MKDIR) $(B)/client/ogg;fi
@@ -846,6 +851,7 @@ endif
 	@if [ ! -d $(B)/rendv ];then $(MKDIR) $(B)/rendv;fi
 ifneq ($(BUILD_SERVER),0)
 	@if [ ! -d $(B)/ded ];then $(MKDIR) $(B)/ded/qvm;fi
+	@if [ ! -d $(B)/ded/qvm ];then $(MKDIR) $(B)/ded/qvm;fi
 endif
 
 #############################################################################
@@ -1116,6 +1122,7 @@ Q3OBJ = \
   \
   $(B)/client/cmd.o \
   $(B)/client/common.o \
+  $(B)/client/plugin_vm.o \
   $(B)/client/cvar.o \
   $(B)/client/files.o \
   $(B)/client/history.o \
@@ -1151,8 +1158,9 @@ Q3OBJ = \
   $(B)/client/sv_main.o \
   $(B)/client/sv_net_chan.o \
   $(B)/client/sv_plugin.o \
-  $(B)/client/sv_plugin_guard.o \
+  $(B)/client/sv_http.o \
   $(B)/client/sv_snapshot.o \
+  $(B)/client/sv_state.o \
   $(B)/client/sv_world.o \
   \
   $(B)/client/q_math.o \
@@ -1359,8 +1367,9 @@ Q3DOBJ = \
   $(B)/ded/sv_main.o \
   $(B)/ded/sv_net_chan.o \
   $(B)/ded/sv_plugin.o \
-  $(B)/ded/sv_plugin_guard.o \
+  $(B)/ded/sv_http.o \
   $(B)/ded/sv_snapshot.o \
+  $(B)/ded/sv_state.o \
   $(B)/ded/sv_world.o \
   \
   $(B)/ded/cm_load.o \
@@ -1370,6 +1379,7 @@ Q3DOBJ = \
   $(B)/ded/cm_trace.o \
   $(B)/ded/cmd.o \
   $(B)/ded/common.o \
+  $(B)/ded/plugin_vm.o \
   $(B)/ded/cvar.o \
   $(B)/ded/files.o \
   $(B)/ded/history.o \
@@ -1460,7 +1470,7 @@ endif
 $(B)/$(TARGET_SERVER): $(Q3DOBJ)
 	$(echo_cmd) $(Q3DOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) -o $@ $(Q3DOBJ) $(LDFLAGS)
+	$(Q)$(CC) -o $@ $(Q3DOBJ) $(LDFLAGS) $(SERVER_LDFLAGS)
 
 #############################################################################
 ## CLIENT/SERVER RULES
