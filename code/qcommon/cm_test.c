@@ -411,6 +411,27 @@ void	CM_AdjustAreaPortalState( int area1, int area2, qboolean open ) {
 
 /*
 ====================
+CM_PortalStateSize / CM_GetPortalState / CM_SetPortalState
+
+The open/closed state of the area portals (doors) lives here and not in the game module, so a snapshot of the game
+module (sv_state.c) has to keep it as well.
+====================
+*/
+int CM_PortalStateSize( void ) {
+	return cm.numAreas * cm.numAreas * (int)sizeof( int );
+}
+
+void CM_GetPortalState( int *out ) {
+	Com_Memcpy( out, cm.areaPortals, CM_PortalStateSize() );
+}
+
+void CM_SetPortalState( const int *in ) {
+	Com_Memcpy( cm.areaPortals, in, CM_PortalStateSize() );
+	CM_FloodAreaConnections();
+}
+
+/*
+====================
 CM_AreasConnected
 
 ====================

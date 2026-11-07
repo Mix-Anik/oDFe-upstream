@@ -144,6 +144,9 @@ jobs:
     - name: Libraries of the SDK (JSON, HTTP)
       run: sh tests/sdk_libs/run.sh
 
+    - name: Game snapshots (differences)
+      run: sh tests/game_state/run.sh
+
   # the same programs have to give the same plugin files on all systems
   same-everywhere:
     name: Same plugins on all systems

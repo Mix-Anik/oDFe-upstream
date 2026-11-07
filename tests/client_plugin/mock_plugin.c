@@ -17,7 +17,7 @@ It records what the engine hands it, and tries the drawing calls in phases where
 #define ODF_PLUGIN_VERSION "mock 1.0"
 #endif
 
-#define EXPORTS( X ) X(OnInit) X(OnShutdown) X(OnMapLoad) X(OnCgameShutdown) X(OnDraw3D) X(OnDraw2D) X(OnFilterSound)
+#define EXPORTS( X ) X(OnInit) X(OnShutdown) X(OnMapLoad) X(OnCgameShutdown) X(OnDraw3D) X(OnDraw2D) X(OnFilterSound) X(OnDemoSeek)
 
 // the entry point has to come first
 #include "odfc_entry.h"
@@ -86,6 +86,15 @@ static void MockCommand( int argc, const char **argv )
 			spin++;
 		}
 	}
+	End();
+}
+
+void OnDemoSeek( int fromTime, int toTime )
+{
+	Begin();
+	st.seekCalls++;
+	st.seekFrom = fromTime;
+	st.seekTo = toTime;
 	End();
 }
 
@@ -223,6 +232,9 @@ void OnDraw3D( const odfcView_t *view )
 	TryDrawing3D();
 	TryDrawing2D();		// not allowed here
 	st.weaponOk = GetWeaponState( &st.weapons );
+	st.statsOk = GetPlayerStats( &st.pstats );
+	st.ghostInfoOk = GetGhostInfo( st.ghostSlot, &st.ghostInfo );
+	st.ghostGot = GetGhostPath( st.ghostSlot, st.ghostFirst, 4, st.ghostPts );
 	DrawModel( 1, 2, 3, 4, st.modelHandle, modelOrigin, modelAngles, 100 );		// 2D only: dropped here
 	End();
 }
@@ -234,6 +246,15 @@ void OnDraw2D( int phase )
 	if ( st.numPhases < 8 ) {
 		st.phases[st.numPhases++] = phase;
 	}
+	if ( st.snapOp == 1 ) {
+		st.snapResult = SnapshotCreate( st.snapFlags );
+	} else if ( st.snapOp == 2 ) {
+		st.snapResult = SnapshotApply( st.snapArg, st.snapFlags );
+	} else if ( st.snapOp == 3 ) {
+		SnapshotFree( st.snapArg );
+		st.snapResult = 0;
+	}
+	st.snapOp = 0;
 	TryDrawing2D();
 	TryDrawing3D();		// not allowed here
 	if ( st.modelHandle ) {

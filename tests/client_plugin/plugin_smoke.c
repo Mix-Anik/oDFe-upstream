@@ -16,6 +16,7 @@ The plugin is <home dir>/plugins/<plugin name>.qvm.
 #include "client.h"
 #include "stubs.h"
 #include "plugin_vm.h"
+#include "odfc_types.h"
 
 #define OWN_CLIENT 1
 
@@ -161,6 +162,26 @@ static qboolean Run( const char *home, const char *name, int frames, int interpr
 		stCmdArgc = 0;
 	}
 
+	// ODF_SMOKE_GHOST=n: a ghost of n points in slot 0 (50 ms apart, near where the player runs, or 600 units away with a "far" after the
+	// number) and a race that runs; exercises the plugins that follow a ghost
+	if ( getenv( "ODF_SMOKE_GHOST" ) ) {
+		const int n = atoi( getenv( "ODF_SMOKE_GHOST" ) );
+		const float yOff = strstr( getenv( "ODF_SMOKE_GHOST" ), "far" ) ? 600.0f : 0.0f;
+		odfcGhostPoint_t pts[256];
+		int sent = 0, c, k;
+
+		while ( sent < n ) {
+			c = n - sent < 256 ? n - sent : 256;
+			for ( k = 0; k < c; k++ ) {
+				memset( &pts[k], 0, sizeof( pts[k] ) );
+				pts[k].ms = ( sent + k ) * 50;
+				VectorSet( pts[k].origin, 100.0f + ( ( sent + k ) % 120 ), 200.0f + yOff + ( ( sent + k ) / 120 ) * 3.0f, 300.0f );
+			}
+			CL_Plugins_SetGhostPath( 0, sent, c, pts, sent + c == n );
+			sent += c;
+		}
+	}
+
 	stPolyCalls = stPolyVerts = stBeamCalls = stSetColorCalls = stStretchCalls = stTraceCalls = stTraceBoxCalls = 0;
 	numTestPrints = 0;
 	start = Now();
@@ -180,6 +201,12 @@ static qboolean Run( const char *home, const char *name, int frames, int interpr
 			ps.stats[STAT_WEAPONS] = ( 1 << WP_ROCKET_LAUNCHER ) | ( 1 << WP_GRENADE_LAUNCHER );
 			ps.ammo[WP_ROCKET_LAUNCHER] = 10;
 			ps.ammo[WP_GRENADE_LAUNCHER] = 5;
+			if ( getenv( "ODF_SMOKE_GHOST" ) ) {		// DeFRaG's race: the timer runs, ms in stats[7] / [8]
+				ps.stats[12] = 2 | 4;
+				ps.stats[7] = ( j * 8 ) >> 16;
+				ps.stats[8] = ( j * 8 ) & 0xffff;
+				ps.commandTime = cl.snap.serverTime + 8;
+			}
 			VectorSet( ps.origin, 100 + j % 100, 200, 300 );
 			VectorSet( ps.velocity, 320, 100 + j % 50, -50 );
 			VectorSet( ps.viewangles, 10, ( j * 3 ) % 360, 0 );

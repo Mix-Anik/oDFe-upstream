@@ -26,6 +26,12 @@ extern int stCvarFlagsLast;
 extern int stTraceCalls;
 extern int stTraceBoxCalls;		// traces with a box (mins/maxs not NULL)
 
+// the game snapshots (sv_state.c) and the cgame time change, as far as the plugin code uses them
+extern int stStateHandle, stStateOwnerOf;
+extern int stStateCreates, stStateCreateOwner, stStateApplies, stStateFrees, stStateFreeOwnerCalls, stStateFreeOwner;
+extern int stSeekable;
+extern int stTimeChangeCalls, stTimeChangeArgs[3];
+
 void Test_SetCvar( const char *name, const char *value, int flags );
 
 #endif

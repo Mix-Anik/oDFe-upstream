@@ -210,6 +210,133 @@ static void Frame3D( void )
 	CL_Plugins_BeforeScene( &fd );
 }
 
+// the 2D part of a frame is where the mock does what the test asked for (snapOp)
+static void Frame2D( void )
+{
+	refdef_t fd = TestRefdef();
+
+	CL_Plugins_AfterScene( &fd );
+}
+
+// snapshots of the game: who may call them, that applying waits for the next frame, and what the client does with the first
+// snapshot after it
+static void TestStateApi( void )
+{
+	int owner;
+
+	printf( "game snapshots\n" );
+	stStateCreates = stStateApplies = stStateFrees = 0;
+
+	// no cheats: the dispatcher refuses before the engine hears of it
+	cl_connectedToCheatServer = 0;
+	mock->snapOp = 1;
+	Frame2D();
+	CHECK( mock->snapResult == 0 && stStateCreates == 0, "SnapshotCreate without cheats: %d, calls %d", mock->snapResult, stStateCreates );
+
+	cl_connectedToCheatServer = 1;
+	mock->snapOp = 1;
+	mock->snapFlags = 1;
+	Frame2D();
+	CHECK( mock->snapResult == 0 && stStateCreates == 0, "flags other than 0 must be refused (%d)", mock->snapResult );
+
+	mock->snapOp = 1;
+	mock->snapFlags = 0;
+	Frame2D();
+	CHECK( mock->snapResult == stStateHandle && stStateCreates == 1, "SnapshotCreate with cheats: %d", mock->snapResult );
+	owner = stStateCreateOwner;
+	CHECK( owner > 0, "the plugin has to be known as an owner (%d)", owner );
+
+	// a demo: the engine says no
+	clc.demoplaying = qtrue;
+	mock->snapOp = 1;
+	Frame2D();
+	CHECK( mock->snapResult == 0 && stStateCreates == 1, "SnapshotCreate in a demo" );
+	mock->snapOp = 2;
+	mock->snapArg = stStateHandle;
+	Frame2D();
+	CHECK( mock->snapResult == 0, "SnapshotApply in a demo" );
+	clc.demoplaying = qfalse;
+
+	// apply: only a handle of the plugin, only a cgame that takes time changes; nothing happens before the next frame
+	mock->snapOp = 2;
+	mock->snapArg = stStateHandle + 1;
+	Frame2D();
+	CHECK( mock->snapResult == 0, "a handle that does not exist" );
+	stStateOwnerOf = owner + 1;
+	mock->snapOp = 2;
+	mock->snapArg = stStateHandle;
+	Frame2D();
+	CHECK( mock->snapResult == 0, "the snapshot of another plugin" );
+	stStateOwnerOf = owner;
+	stSeekable = 0;
+	mock->snapOp = 2;
+	Frame2D();
+	CHECK( mock->snapResult == 0, "a cgame that does not take time changes" );
+	stSeekable = 1;
+	mock->snapOp = 2;
+	Frame2D();
+	CHECK( mock->snapResult == 1 && stStateApplies == 0, "SnapshotApply is accepted but not made yet (%d, applies %d)", mock->snapResult, stStateApplies );
+
+	// the next frame makes it
+	cls.state = CA_ACTIVE;
+	clc.serverMessageSequence = 40;
+	CL_Plugins_BeforeFrame();
+	CHECK( stStateApplies == 1, "applied at the start of the frame: %d", stStateApplies );
+	CL_Plugins_BeforeFrame();
+	CHECK( stStateApplies == 1, "applied twice" );
+
+	// a snapshot of the old timeline arrives: nothing changes
+	cl.serverTime = 5000;
+	cl.snap.messageNum = 40;
+	cl.snap.serverTime = 4990;
+	CL_Plugins_StateSnapshot();
+	CHECK( cl.serverTime == 5000, "an old snapshot must not reset the clock" );
+
+	// the first one after it: the clock and the view are set to it, the cgame and the plugin hear of it later
+	cl.snap.messageNum = 41;
+	cl.snap.serverTime = 3000;
+	cl.snap.ps.viewangles[YAW] = 90;
+	cl.snap.ps.delta_angles[YAW] = ANGLE2SHORT( 30 );
+	cls.realtime = 777;
+	cl.cmds[3].serverTime = 4900;
+	cl.cmds[CMD_BACKUP - 1].serverTime = 5000;
+	stTimeChangeCalls = 0;
+	mock->seekCalls = 0;
+	CL_Plugins_StateSnapshot();
+	CHECK( cl.serverTime == 3000 && cl.oldServerTime == 3000 && cl.oldFrameServerTime == 3000, "clock %d / %d / %d",
+		cl.serverTime, cl.oldServerTime, cl.oldFrameServerTime );
+	CHECK( cl.serverTimeDelta == 3000 - 777, "serverTimeDelta %d", cl.serverTimeDelta );
+	CHECK( cl.cmds[3].serverTime == 0 && cl.cmds[CMD_BACKUP - 1].serverTime == 0, "the old usercmds must not look newer than the server's" );
+	CHECK( fabs( cl.viewangles[YAW] - 60.0f ) < 0.01f, "view angle %g, wanted 60", cl.viewangles[YAW] );
+	CHECK( stTimeChangeCalls == 0 && mock->seekCalls == 0, "the cgame is told in SetCGameTime, not while the packet is read" );
+	CL_Plugins_StateSnapshot();
+	cl.snap.serverTime = 3008;
+	cl.serverTime = 3100;
+	CL_Plugins_StateSnapshot();
+	CHECK( cl.serverTime == 3100, "only the first snapshot resets the clock" );
+
+	CL_Plugins_StateNotify();
+	CHECK( stTimeChangeCalls == 1 && stTimeChangeArgs[0] == 3008 && stTimeChangeArgs[1] == 41, "cgame time change: %d calls (%d, %d)",
+		stTimeChangeCalls, stTimeChangeArgs[0], stTimeChangeArgs[1] );
+	CHECK( mock->seekCalls == 1 && mock->seekFrom == 5000 && mock->seekTo == 3008, "OnDemoSeek %d: %d -> %d", mock->seekCalls,
+		mock->seekFrom, mock->seekTo );
+	CL_Plugins_StateNotify();
+	CHECK( stTimeChangeCalls == 1 && mock->seekCalls == 1, "told twice" );
+
+	// free: only the owner
+	stStateOwnerOf = owner + 1;
+	mock->snapOp = 3;
+	mock->snapArg = stStateHandle;
+	Frame2D();
+	CHECK( stStateFrees == 0, "freed the snapshot of another plugin" );
+	stStateOwnerOf = owner;
+	mock->snapOp = 3;
+	Frame2D();
+	CHECK( stStateFrees == 1, "SnapshotFree" );
+
+	cl_connectedToCheatServer = 0;
+}
+
 static void TestLoading( void )
 {
 	printf( "loading\n" );
@@ -535,6 +662,97 @@ static void TestMapChange( void )
 
 
 
+static void TestGhostPath( void )
+{
+	odfcGhostPoint_t pts[6];
+	int i, serial;
+
+	printf( "ghost paths\n" );
+	for ( i = 0; i < 6; i++ ) {
+		memset( &pts[i], 0, sizeof( pts[i] ) );
+		pts[i].ms = i * 50;
+		pts[i].origin[0] = (float)( i * 40 );
+		pts[i].flags = i == 4 ? ODFC_GHOST_BREAK : 0;
+	}
+	mock->ghostSlot = 1;
+	mock->ghostFirst = 0;
+	Frame3D();
+	CHECK( !mock->ghostInfoOk && mock->ghostGot == 0, "a slot without a path: info %d got %d", mock->ghostInfoOk, mock->ghostGot );
+
+	// the game module sends the path in parts
+	CL_Plugins_SetGhostPath( 1, 0, 3, pts, 0 );
+	Frame3D();
+	CHECK( mock->ghostInfoOk && mock->ghostInfo.numPoints == 3 && mock->ghostInfo.durationMs == 100 && !mock->ghostInfo.complete && mock->ghostGot == 3
+		&& mock->ghostPts[2].origin[0] == 80.0f, "first part: info %d points %d duration %d got %d", mock->ghostInfoOk,
+		mock->ghostInfo.numPoints, mock->ghostInfo.durationMs, mock->ghostGot );
+	CHECK( mock->ghostInfo.raceMs == 0, "no time known yet: %d", mock->ghostInfo.raceMs );
+	serial = mock->ghostInfo.serial;
+
+	CL_Plugins_SetGhostPath( 1, 5, 1, pts + 5, 0 );		// does not continue: dropped
+	CL_Plugins_SetGhostTime( 1, 7648 );
+	CL_Plugins_SetGhostPath( 1, 3, 3, pts + 3, 1 );
+	mock->ghostFirst = 4;
+	Frame3D();
+	CHECK( mock->ghostInfo.raceMs == 7648, "the time of the run: %d", mock->ghostInfo.raceMs );
+	CHECK( mock->ghostInfo.numPoints == 6 && mock->ghostInfo.complete && mock->ghostInfo.serial == serial && mock->ghostGot == 2
+		&& mock->ghostPts[0].flags == ODFC_GHOST_BREAK && mock->ghostPts[1].ms == 250, "second part: points %d complete %d got %d",
+		mock->ghostInfo.numPoints, mock->ghostInfo.complete, mock->ghostGot );
+	mock->ghostFirst = 6;
+	Frame3D();
+	CHECK( mock->ghostGot == 0, "reading behind the end" );
+
+	// points that go back in time are dropped, a new path replaces the old one
+	pts[0].ms = 10;
+	CL_Plugins_SetGhostPath( 1, 6, 1, pts, 1 );
+	mock->ghostFirst = 0;
+	Frame3D();
+	CHECK( mock->ghostInfo.numPoints == 6, "a point from the past was added" );
+	CL_Plugins_SetGhostPath( 1, 0, 2, pts + 1, 0 );
+	Frame3D();
+	CHECK( mock->ghostInfo.raceMs == 0, "a new path forgets the time" );
+	CHECK( mock->ghostInfo.numPoints == 2 && !mock->ghostInfo.complete && mock->ghostInfo.serial != serial, "a new path: points %d serial %d",
+		mock->ghostInfo.numPoints, mock->ghostInfo.serial );
+
+	// a long path (the store grows): 20000 points in parts of 4000
+	{
+		static odfcGhostPoint_t big[4000];
+		int part, k;
+
+		for ( part = 0; part < 5; part++ ) {
+			for ( k = 0; k < 4000; k++ ) {
+				memset( &big[k], 0, sizeof( big[k] ) );
+				big[k].ms = ( part * 4000 + k ) * 8;
+				big[k].origin[0] = (float)( part * 4000 + k );
+			}
+			CL_Plugins_SetGhostPath( 2, part * 4000, 4000, big, part == 4 );
+		}
+		mock->ghostSlot = 2;
+		mock->ghostFirst = 19998;
+		Frame3D();
+		CHECK( mock->ghostInfoOk && mock->ghostInfo.numPoints == 20000 && mock->ghostInfo.complete && mock->ghostInfo.durationMs == 19999 * 8
+			&& mock->ghostGot == 2 && mock->ghostPts[1].origin[0] == 19999.0f, "a long path: points %d got %d", mock->ghostInfo.numPoints, mock->ghostGot );
+		mock->ghostFirst = 8190;		// across the first growth
+		Frame3D();
+		CHECK( mock->ghostGot == 4 && mock->ghostPts[3].origin[0] == 8193.0f, "across a growth of the store: got %d", mock->ghostGot );
+		mock->ghostSlot = 1;
+		mock->ghostFirst = 0;
+	}
+
+	// other slots, bad slots
+	CL_Plugins_SetGhostPath( 7, 0, 2, pts, 0 );
+	CL_Plugins_SetGhostTime( 7, 100 );
+	CL_Plugins_SetGhostTime( -1, 100 );
+	CL_Plugins_SetGhostPath( -1, 0, 2, pts, 0 );
+	mock->ghostSlot = 0;
+	Frame3D();
+	CHECK( !mock->ghostInfoOk, "slot 0 has nothing" );
+	mock->ghostSlot = 9;
+	Frame3D();
+	CHECK( !mock->ghostInfoOk && mock->ghostGot == 0, "a slot that does not exist" );
+	mock->ghostSlot = 1;
+	mock->ghostFirst = 0;
+}
+
 static void TestV4( void )
 {
 	refdef_t fd = TestRefdef();
@@ -552,14 +770,24 @@ static void TestV4( void )
 		ps.ammo[2] = 100;
 		ps.ammo[5] = 7;
 		ps.ammo[15] = 99;
+		ps.commandTime = 4321;
+		ps.stats[7] = 3;
+		ps.stats[8] = 0x1234;
+		ps.stats[12] = 6;
+		ps.persistant[5] = 77;
+		CL_Plugins_SetStatsTime( 1032 );
 		CL_Plugins_SetPlayerState( &ps, 0 );
 	}
 	Frame3D();
+	CHECK( mock->statsOk && mock->pstats.commandTime == 4321 && mock->pstats.stats[7] == 3 && mock->pstats.stats[8] == 0x1234
+		&& mock->pstats.stats[12] == 6 && mock->pstats.persistant[5] == 77 && mock->pstats.stats[15] == 0 && mock->pstats.snapshotTime == 1032,
+		"player stats: ok %d time %d stats %d %d %d persistant %d", mock->statsOk, mock->pstats.commandTime, mock->pstats.stats[7],
+		mock->pstats.stats[8], mock->pstats.stats[12], mock->pstats.persistant[5] );
 	CHECK( mock->weaponOk && mock->weapons.weapons == ( ( 1 << 2 ) | ( 1 << 5 ) ) && mock->weapons.ammo[2] == 100 && mock->weapons.ammo[5] == 7 && mock->weapons.ammo[15] == 99,
 		"weapon state: ok %d weapons %x ammo %d %d", mock->weaponOk, mock->weapons.weapons, mock->weapons.ammo[2], mock->weapons.ammo[5] );
 	cl.serverTime = 1070;
 	Frame3D();
-	CHECK( !mock->weaponOk, "a stale weapon state" );
+	CHECK( !mock->weaponOk && !mock->statsOk, "a stale weapon state or stats" );
 	cl.serverTime = 1060;
 
 	// models: registered in MapLoad, drawn in Draw2D only, scaled like the pictures
@@ -945,7 +1173,11 @@ int main( int argc, char **argv )
 	TestPlayerState();
 	TestMoveState();
 	TestV4();
+	TestGhostPath();
+	TestStateApi();
 	TestMapChange();
+	Frame3D();
+	CHECK( !mock->ghostInfoOk, "a ghost path survived the end of the game module" );
 
 	printf( "shutdown\n" );
 	numTestPrints = 0;

@@ -188,7 +188,10 @@ typedef enum {
 
 	// oDFe extensions, found by name with trap_GetValue
 	CG_ODF_SET_PLAYERSTATE = 710,	// void trap_ODF_SetPlayerState( const playerState_t *ps, int viewFlags ): hands the predicted player state and what the view is to the client plugins (ODFC_VIEW_* of code/plugin_api/include/odfc_types.h)
-	CG_ODF_DEMOSEEK_SUPPORT = 711	// void trap_ODF_DemoSeekSupport( int version ): the cgame takes CG_ODF_TIME_CHANGE, so the engine may jump around in a demo (cl_demoseek.c)
+	CG_ODF_DEMOSEEK_SUPPORT = 711,	// void trap_ODF_DemoSeekSupport( int version ): the cgame takes CG_ODF_TIME_CHANGE, so the engine may jump around in a demo (cl_demoseek.c)
+	CG_ODF_SET_STATSTIME = 714,		// void trap_ODF_SetStatsTime( int serverTime ): the server time of the snapshot the published player state (stats, flags) is from
+	CG_ODF_GHOST_TIME = 713,		// void trap_ODF_GhostTime( int slot, int ms ): the exact race time of the run the path of the slot was recorded from (after the path was started with CG_ODF_GHOST_PATH)
+	CG_ODF_GHOST_PATH = 712			// void trap_ODF_GhostPath( int slot, int first, int count, const odfcGhostPoint_t *points, int complete ): hands (a part of) the path of a ghost to the client plugins. first 0 starts a new path; later calls must continue where the last ended
 
 } cgameImport_t;
 

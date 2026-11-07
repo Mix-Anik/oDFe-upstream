@@ -41,6 +41,12 @@ typedef struct {
 
 	int				weaponOk;
 	odfcWeaponState_t	weapons;
+	int				statsOk;
+	odfcPlayerStats_t	pstats;
+	int				ghostSlot, ghostFirst;		// set by the test: the slot and first point the mock asks for in Draw3D
+	int				ghostInfoOk, ghostGot;
+	odfcGhostInfo_t	ghostInfo;
+	odfcGhostPoint_t	ghostPts[4];
 	int				modelHandle;
 	int				cmdRegistered, cmdBadName, cmdTaken, cmdSecond, cmdNoHandler;
 	int				commandCalls, commandArgc;
@@ -53,6 +59,10 @@ typedef struct {
 	int				draw2d;
 	int				phases[8];
 	int				numPhases;
+
+	int				snapOp, snapArg, snapFlags;	// set by the test: 1 SnapshotCreate, 2 SnapshotApply( snapArg ), 3 SnapshotFree( snapArg ), made in the next Draw2D
+	int				snapResult;
+	int				seekCalls, seekFrom, seekTo;	// OnDemoSeek
 } mockState_t;
 
 #endif

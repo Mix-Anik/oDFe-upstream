@@ -1039,6 +1039,7 @@ void SV_ShutdownGameProgs( void ) {
 		return;
 	}
 	VM_Call( gvm, 1, GAME_SHUTDOWN, qfalse );
+	SV_StateReset();
 	VM_Free( gvm );
 	gvm = NULL;
 	FS_VM_CloseFiles( H_QAGAME );
@@ -1084,6 +1085,7 @@ void SV_RestartGameProgs( void ) {
 		return;
 	}
 	VM_Call( gvm, 1, GAME_SHUTDOWN, qtrue );
+	SV_StateReset();
 
 	// do a restart instead of a free
 	gvm = VM_Restart( gvm );

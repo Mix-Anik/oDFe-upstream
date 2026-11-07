@@ -153,6 +153,37 @@ typedef struct {
 	int		ammo[ODFC_MAX_WEAPONS];		// by weapon number
 } odfcWeaponState_t;
 
+// The raw stats and persistant arrays of the player state of the watched player (the same prediction as odfcPlayerState_t). A mod
+// keeps its own numbers there: DeFRaG has the race timer (stats[7] << 16 | stats[8] & 0xffff; plain with cheats, and the oDFs game module publishes it plain always) and the state of
+// the run (stats[12]). The plugin has to know what they mean.
+#define ODFC_MAX_STATS			16
+#define ODFC_MAX_PERSISTANT		16
+typedef struct {
+	int		commandTime;
+	int		stats[ODFC_MAX_STATS];
+	int		persistant[ODFC_MAX_PERSISTANT];
+	int		snapshotTime;		// the server time of the snapshot the stats are from (the predicted state starts from it), 0: not known
+} odfcPlayerStats_t;
+
+// A ghost the game plays (DeFRaG ghost, slots 0 to 4): the whole path it was recorded with. The points are in the order of
+// their time, ms counts from the start of the recording (the start of the race).
+#define ODFC_GHOST_SLOTS		5
+#define ODFC_GHOST_MAX_POINTS	131072
+#define ODFC_GHOST_BREAK		1		// odfcGhostPoint_t.flags: the ghost was moved (teleport), do not connect this point to the one before
+typedef struct {
+	int		ms;
+	float	origin[3];
+	int		flags;			// ODFC_GHOST_*
+} odfcGhostPoint_t;
+
+typedef struct {
+	int		serial;			// changes when the slot gets another path (also when it is emptied)
+	int		numPoints;		// the points that are there now
+	int		durationMs;		// ms of the last point
+	int		complete;		// the whole file was read (numPoints no longer grows)
+	int		raceMs;			// the exact race time of the run the ghost was recorded from (a best run: its time is on record), 0: not known
+} odfcGhostInfo_t;
+
 #define ODFC_MAX_SNAPSHOT_ENTITIES	256
 
 typedef struct {

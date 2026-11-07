@@ -13,11 +13,12 @@
 #define ODFC_CAP_draw	( 1u << 1 )
 #define ODFC_CAP_command	( 1u << 2 )
 #define ODFC_CAP_sound	( 1u << 3 )
+#define ODFC_CAP_state	( 1u << 4 )
 #define ODFC_CAPS_RESTRICTED	( 0 )
-static const char *const odfc_capNames[] = { "world", "draw", "command", "sound" };
-#define ODFC_NUM_CAPS	4
+static const char *const odfc_capNames[] = { "world", "draw", "command", "sound", "state" };
+#define ODFC_NUM_CAPS	5
 
-#define ODFC_NUM_IMPORTS	28
+#define ODFC_NUM_IMPORTS	34
 
 // The functions the engine implements, written by hand. The host also has to define
 //   static qboolean ODF_CheatsAllowed( void );   the rule for the functions marked cheat
@@ -40,6 +41,10 @@ static int Imp_GetPlayerState( odfcPlayerState_t *out );
 static int Imp_GetMoveState( odfcMoveState_t *out );
 static int Imp_PointContents( const float *point );
 static int Imp_GetWeaponState( odfcWeaponState_t *out );
+static int Imp_GetPlayerStats( odfcPlayerStats_t *out );
+static int Imp_SnapshotCreate( int flags );
+static int Imp_SnapshotApply( int handle, int flags );
+static void Imp_SnapshotFree( int handle );
 static int Imp_RegisterShader( const char *name );
 static int Imp_RegisterShaderNoMip( const char *name );
 static int Imp_RegisterModel( const char *name );
@@ -49,6 +54,8 @@ static void Imp_SetColor( const float *rgba );
 static void Imp_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, int shader );
 static void Imp_DrawModel( float x, float y, float w, float h, int model, const float *origin, const float *angles, int time );
 static int Imp_CommandRegister( const char *name, int handler );
+static int Imp_GetGhostInfo( int slot, odfcGhostInfo_t *out );
+static int Imp_GetGhostPath( int slot, int first, int count, odfcGhostPoint_t *out );
 
 static ID_INLINE float Odf_ArgFloat( intptr_t arg )
 {
@@ -223,7 +230,44 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			PluginVM_Ptr( vm, args[1], sizeof( odfcWeaponState_t ), ODF_ALIGNOF( odfcWeaponState_t ) < 4 ? ODF_ALIGNOF( odfcWeaponState_t ) : 4, qfalse, (void **)&p_out );
 			return Imp_GetWeaponState( p_out );
 		}
-		case 19: {		// RegisterShader
+		case 19: {		// GetPlayerStats
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_world ) ) {
+				PluginVM_Denied( vm, "GetPlayerStats", "world" );
+				return 0;
+			}
+			odfcPlayerStats_t * p_out = NULL;
+			PluginVM_Ptr( vm, args[1], sizeof( odfcPlayerStats_t ), ODF_ALIGNOF( odfcPlayerStats_t ) < 4 ? ODF_ALIGNOF( odfcPlayerStats_t ) : 4, qfalse, (void **)&p_out );
+			return Imp_GetPlayerStats( p_out );
+		}
+		case 20: {		// SnapshotCreate
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_state ) ) {
+				PluginVM_Denied( vm, "SnapshotCreate", "state" );
+				return 0;
+			}
+			if ( !ODF_CheatsAllowed() ) {
+				return 0;		// cheats only
+			}
+			return Imp_SnapshotCreate( (int)args[1] );
+		}
+		case 21: {		// SnapshotApply
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_state ) ) {
+				PluginVM_Denied( vm, "SnapshotApply", "state" );
+				return 0;
+			}
+			if ( !ODF_CheatsAllowed() ) {
+				return 0;		// cheats only
+			}
+			return Imp_SnapshotApply( (int)args[1], (int)args[2] );
+		}
+		case 22: {		// SnapshotFree
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_state ) ) {
+				PluginVM_Denied( vm, "SnapshotFree", "state" );
+				return 0;
+			}
+			Imp_SnapshotFree( (int)args[1] );
+			return 0;
+		}
+		case 23: {		// RegisterShader
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "RegisterShader", "draw" );
 				return 0;
@@ -232,7 +276,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			PluginVM_String( vm, args[1], qfalse, &p_name );
 			return Imp_RegisterShader( p_name );
 		}
-		case 20: {		// RegisterShaderNoMip
+		case 24: {		// RegisterShaderNoMip
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "RegisterShaderNoMip", "draw" );
 				return 0;
@@ -241,7 +285,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			PluginVM_String( vm, args[1], qfalse, &p_name );
 			return Imp_RegisterShaderNoMip( p_name );
 		}
-		case 21: {		// RegisterModel
+		case 25: {		// RegisterModel
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "RegisterModel", "draw" );
 				return 0;
@@ -250,7 +294,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			PluginVM_String( vm, args[1], qfalse, &p_name );
 			return Imp_RegisterModel( p_name );
 		}
-		case 22: {		// AddPoly
+		case 26: {		// AddPoly
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "AddPoly", "draw" );
 				return 0;
@@ -266,7 +310,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			Imp_AddPoly( (int)args[1], (int)args[2], p_verts );
 			return 0;
 		}
-		case 23: {		// AddBeam
+		case 27: {		// AddBeam
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "AddBeam", "draw" );
 				return 0;
@@ -280,7 +324,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			Imp_AddBeam( (int)args[1], p_from, p_to, p_rgba );
 			return 0;
 		}
-		case 24: {		// SetColor
+		case 28: {		// SetColor
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "SetColor", "draw" );
 				return 0;
@@ -290,7 +334,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			Imp_SetColor( p_rgba );
 			return 0;
 		}
-		case 25: {		// DrawStretchPic
+		case 29: {		// DrawStretchPic
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "DrawStretchPic", "draw" );
 				return 0;
@@ -298,7 +342,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			Imp_DrawStretchPic( Odf_ArgFloat( args[1] ), Odf_ArgFloat( args[2] ), Odf_ArgFloat( args[3] ), Odf_ArgFloat( args[4] ), Odf_ArgFloat( args[5] ), Odf_ArgFloat( args[6] ), Odf_ArgFloat( args[7] ), Odf_ArgFloat( args[8] ), (int)args[9] );
 			return 0;
 		}
-		case 26: {		// DrawModel
+		case 30: {		// DrawModel
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_draw ) ) {
 				PluginVM_Denied( vm, "DrawModel", "draw" );
 				return 0;
@@ -310,7 +354,7 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			Imp_DrawModel( Odf_ArgFloat( args[1] ), Odf_ArgFloat( args[2] ), Odf_ArgFloat( args[3] ), Odf_ArgFloat( args[4] ), (int)args[5], p_origin, p_angles, (int)args[8] );
 			return 0;
 		}
-		case 27: {		// CommandRegister
+		case 31: {		// CommandRegister
 			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_command ) ) {
 				PluginVM_Denied( vm, "CommandRegister", "command" );
 				return 0;
@@ -318,6 +362,30 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 			const char * p_name = NULL;
 			PluginVM_String( vm, args[1], qfalse, &p_name );
 			return Imp_CommandRegister( p_name, (int)args[2] );
+		}
+		case 32: {		// GetGhostInfo
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_world ) ) {
+				PluginVM_Denied( vm, "GetGhostInfo", "world" );
+				return 0;
+			}
+			odfcGhostInfo_t * p_out = NULL;
+			PluginVM_Ptr( vm, args[2], sizeof( odfcGhostInfo_t ), ODF_ALIGNOF( odfcGhostInfo_t ) < 4 ? ODF_ALIGNOF( odfcGhostInfo_t ) : 4, qfalse, (void **)&p_out );
+			return Imp_GetGhostInfo( (int)args[1], p_out );
+		}
+		case 33: {		// GetGhostPath
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_world ) ) {
+				PluginVM_Denied( vm, "GetGhostPath", "world" );
+				return 0;
+			}
+			odfcGhostPoint_t * p_out = NULL;
+			if ( (uint32_t)args[3] > 1048576 ) {
+				PluginVM_Trap( vm, "bad size passed to the engine" );
+				return 0;
+			}
+			if ( args[3] != 0 ) {
+				PluginVM_Ptr( vm, args[4], (unsigned)args[3] * sizeof( odfcGhostPoint_t ), ODF_ALIGNOF( odfcGhostPoint_t ) < 4 ? ODF_ALIGNOF( odfcGhostPoint_t ) : 4, qfalse, (void **)&p_out );
+			}
+			return Imp_GetGhostPath( (int)args[1], (int)args[2], (int)args[3], p_out );
 		}
 		default:
 			PluginVM_Trap( vm, "called a function the engine does not have" );

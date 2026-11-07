@@ -60,6 +60,9 @@ int			CM_LeafArea (int leafnum);
 
 void		CM_AdjustAreaPortalState( int area1, int area2, qboolean open );
 qboolean	CM_AreasConnected( int area1, int area2 );
+int			CM_PortalStateSize( void );
+void		CM_GetPortalState( int *out );
+void		CM_SetPortalState( const int *in );
 
 int			CM_WriteAreaBits( byte *buffer, int area );
 

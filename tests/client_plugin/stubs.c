@@ -27,6 +27,33 @@ vm_t *cgvm;
 refexport_t re;
 int cl_connectedToCheatServer;
 
+// ---- the game snapshots (sv_state.c) and the cgame time change ----
+int stStateHandle = 7, stStateOwnerOf;
+int stStateCreates, stStateCreateOwner, stStateApplies, stStateFrees, stStateFreeOwnerCalls, stStateFreeOwner;
+int stSeekable = 1;
+int stTimeChangeCalls, stTimeChangeArgs[3];
+
+int SV_StateCreate( int owner )
+{
+	stStateCreates++;
+	stStateCreateOwner = owner;
+	stStateOwnerOf = owner;
+	return stStateHandle;
+}
+qboolean SV_StateCanApply( int handle ) { return handle == stStateHandle; }
+qboolean SV_StateApply( int handle ) { stStateApplies++; return handle == stStateHandle; }
+void SV_StateFree( int handle ) { (void)handle; stStateFrees++; }
+void SV_StateFreeOwner( int owner ) { stStateFreeOwnerCalls++; stStateFreeOwner = owner; }
+int SV_StateOwner( int handle ) { return handle == stStateHandle ? stStateOwnerOf : 0; }
+qboolean CLDemo_CgameSeekable( void ) { return stSeekable ? qtrue : qfalse; }
+void CL_CGameTimeChange( int serverTime, int snapshotNum, int serverCommandSequence )
+{
+	stTimeChangeCalls++;
+	stTimeChangeArgs[0] = serverTime;
+	stTimeChangeArgs[1] = snapshotNum;
+	stTimeChangeArgs[2] = serverCommandSequence;
+}
+
 char testPrints[MAX_TEST_PRINTS][1024];
 int numTestPrints;
 

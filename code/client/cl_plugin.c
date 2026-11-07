@@ -70,6 +70,20 @@ static playerState_t		publishedPS;
 static int					publishedTime;
 static qboolean				published;
 static int					publishedViewFlags;
+static int					publishedStatsTime;		// the server time of the snapshot the stats of the published state are from, 0: not known
+
+// the paths of the ghosts the game module plays (trap_ODF_GhostPath), by slot
+typedef struct {
+	odfcGhostPoint_t	*points;		// grows by doubling as the path comes in, up to ODFC_GHOST_MAX_POINTS
+	int					capacity;
+	int					num;
+	int					serial;
+	qboolean			complete;
+	int					raceMs;			// the exact time of the run the path comes from, 0: not known
+} ghostPath_t;
+static ghostPath_t			ghostPath[ODFC_GHOST_SLOTS];
+static int					ghostSerial;
+static void GhostPaths_Free( void );
 
 static qboolean CheatsAllowed( void );
 #define ODF_CheatsAllowed CheatsAllowed
@@ -339,6 +353,55 @@ static int Imp_CheatsEnabled( void )
 	return CheatsAllowed();
 }
 
+
+// ---------------------------------------------------------------------------
+// snapshots of the game (the work is in sv_state.c)
+//
+// Creating one is a read and can be done any time. Applying one changes the server and the client, so it is only requested
+// here and made at the start of the next client frame (CL_Plugins_BeforeFrame), when no module is running. The client then
+// waits for the first snapshot of the new timeline and sets its clock to it (CL_Plugins_StateResync), which also tells the
+// plugins (OnDemoSeek) and the cgame (CG_ODF_TIME_CHANGE).
+// ---------------------------------------------------------------------------
+
+static int			stateApplyHandle;		// requested by a plugin, not made yet
+static qboolean		stateWait;				// applied, the first snapshot after it is not here yet
+static int			stateWaitMsg;			// the message number the client had received when it was applied
+static qboolean		stateNotify;			// the clock was reset, the cgame and the plugins do not know yet
+static int			stateOldTime;			// the client clock before it was reset
+
+// the number SV_State* knows a plugin by
+static int PluginOwner( void )
+{
+	return current ? (int)( current - plugins ) + 1 : 0;
+}
+
+static int Imp_SnapshotCreate( int flags )
+{
+	if ( flags || clc.demoplaying || cls.state != CA_ACTIVE ) {
+		return 0;
+	}
+	return SV_StateCreate( PluginOwner() );
+}
+
+static int Imp_SnapshotApply( int handle, int flags )
+{
+	if ( flags || clc.demoplaying || cls.state != CA_ACTIVE || !CLDemo_CgameSeekable() ) {
+		return 0;
+	}
+	if ( SV_StateOwner( handle ) != PluginOwner() || !SV_StateCanApply( handle ) ) {
+		return 0;
+	}
+	stateApplyHandle = handle;
+	return 1;
+}
+
+static void Imp_SnapshotFree( int handle )
+{
+	if ( handle > 0 && SV_StateOwner( handle ) == PluginOwner() ) {
+		SV_StateFree( handle );
+	}
+}
+
 /*
 ===============
 CurrentSnapshot
@@ -572,6 +635,61 @@ static int Imp_GetWeaponState( odfcWeaponState_t *out )
 	return 1;
 }
 
+static int Imp_GetPlayerStats( odfcPlayerStats_t *out )
+{
+	int i;
+
+	if ( !out || !mapLoaded || cls.state != CA_ACTIVE || !published || publishedTime != cl.serverTime ) {
+		return 0;
+	}
+	out->commandTime = publishedPS.commandTime;
+	out->snapshotTime = publishedStatsTime;
+	for ( i = 0; i < ODFC_MAX_STATS; i++ ) {
+		out->stats[i] = publishedPS.stats[i];
+	}
+	for ( i = 0; i < ODFC_MAX_PERSISTANT; i++ ) {
+		out->persistant[i] = publishedPS.persistant[i];
+	}
+	return 1;
+}
+
+static int Imp_GetGhostInfo( int slot, odfcGhostInfo_t *out )
+{
+	const ghostPath_t *g;
+
+	if ( !out || !mapLoaded || slot < 0 || slot >= ODFC_GHOST_SLOTS ) {
+		return 0;
+	}
+	g = &ghostPath[slot];
+	if ( !g->points || g->num <= 0 ) {
+		return 0;
+	}
+	out->serial = g->serial;
+	out->numPoints = g->num;
+	out->durationMs = g->points[g->num - 1].ms;
+	out->complete = g->complete ? 1 : 0;
+	out->raceMs = g->raceMs;
+	return 1;
+}
+
+static int Imp_GetGhostPath( int slot, int first, int count, odfcGhostPoint_t *out )
+{
+	const ghostPath_t *g;
+
+	if ( !out || !mapLoaded || slot < 0 || slot >= ODFC_GHOST_SLOTS || first < 0 || count <= 0 ) {
+		return 0;
+	}
+	g = &ghostPath[slot];
+	if ( !g->points || first >= g->num ) {
+		return 0;
+	}
+	if ( count > g->num - first ) {
+		count = g->num - first;
+	}
+	Com_Memcpy( out, g->points + first, count * sizeof( *out ) );
+	return count;
+}
+
 static int Imp_RegisterShaderNoMip( const char *name )
 {
 	if ( !name || !*name || !mapLoaded ) {
@@ -793,6 +911,7 @@ static void Plugin_RemoveCommands( plugin_t *p )
 // Nothing of a plugin that is gone can run again: its memory is freed with it.
 static void Plugin_Unload( plugin_t *p )
 {
+	SV_StateFreeOwner( (int)( p - plugins ) + 1 );
 	PluginVM_Free( p->vm );
 	p->vm = NULL;
 }
@@ -1219,6 +1338,7 @@ void CL_Plugins_Shutdown( void )
 	mapLoaded = qfalse;
 	numPlugins = 0;
 	numDisabledNames = 0;
+	GhostPaths_Free();
 }
 
 
@@ -1343,6 +1463,82 @@ void CL_Plugins_SetPlayerState( const playerState_t *ps, int viewFlags )
 	published = qtrue;
 }
 
+// The game module hands over a part of the path of a ghost. first 0 starts a new path (the old one is gone), any other part has to
+// continue the points that are there; what does not is dropped. The points must be in the order of their time.
+void CL_Plugins_SetGhostPath( int slot, int first, int count, const void *points, int complete )
+{
+	ghostPath_t *g;
+	const odfcGhostPoint_t *src = (const odfcGhostPoint_t *)points;
+	int i;
+
+	if ( !numPlugins || slot < 0 || slot >= ODFC_GHOST_SLOTS || count < 0 || ( count > 0 && !src ) ) {
+		return;
+	}
+	g = &ghostPath[slot];
+	if ( first == 0 ) {
+		g->num = 0;
+		g->complete = qfalse;
+		g->raceMs = 0;
+		g->serial = ++ghostSerial;
+	} else if ( !g->points || first != g->num ) {
+		return;
+	}
+	if ( count > 0 && g->num + count > g->capacity && g->capacity < ODFC_GHOST_MAX_POINTS ) {
+		int capacity = g->capacity ? g->capacity : 8192;
+		odfcGhostPoint_t *points;
+
+		while ( capacity < g->num + count && capacity < ODFC_GHOST_MAX_POINTS ) {
+			capacity *= 2;
+		}
+		if ( capacity > ODFC_GHOST_MAX_POINTS ) {
+			capacity = ODFC_GHOST_MAX_POINTS;
+		}
+		points = Z_Malloc( capacity * sizeof( odfcGhostPoint_t ) );
+		if ( g->points ) {
+			Com_Memcpy( points, g->points, g->num * sizeof( odfcGhostPoint_t ) );
+			Z_Free( g->points );
+		}
+		g->points = points;
+		g->capacity = capacity;
+	}
+	for ( i = 0; i < count && g->num < g->capacity; i++ ) {
+		if ( g->num > 0 && src[i].ms < g->points[g->num - 1].ms ) {
+			break;
+		}
+		g->points[g->num++] = src[i];
+	}
+	if ( complete ) {
+		g->complete = qtrue;
+	}
+}
+
+// the game module says which snapshot the state it publishes is from (before SetPlayerState, every frame)
+void CL_Plugins_SetStatsTime( int serverTime )
+{
+	publishedStatsTime = serverTime;
+}
+
+// the exact race time of the run the path of a slot was recorded from
+void CL_Plugins_SetGhostTime( int slot, int ms )
+{
+	if ( !numPlugins || slot < 0 || slot >= ODFC_GHOST_SLOTS ) {
+		return;
+	}
+	ghostPath[slot].raceMs = ms > 0 ? ms : 0;
+}
+
+static void GhostPaths_Free( void )
+{
+	int i;
+
+	for ( i = 0; i < ODFC_GHOST_SLOTS; i++ ) {
+		if ( ghostPath[i].points ) {
+			Z_Free( ghostPath[i].points );
+		}
+		Com_Memset( &ghostPath[i], 0, sizeof( ghostPath[i] ) );
+	}
+}
+
 void CL_Plugins_MapLoad( const char *mapName )
 {
 	char name[MAX_QPATH];
@@ -1352,6 +1548,7 @@ void CL_Plugins_MapLoad( const char *mapName )
 	Q_strncpyz( loadedMap, name, sizeof( loadedMap ) );
 	mapLoaded = qtrue;
 	published = qfalse;
+	publishedStatsTime = 0;
 	SoundOwners_Reset();
 	for ( i = 0; i < numPlugins; i++ ) {
 		plugin_t *p = &plugins[i];
@@ -1360,6 +1557,74 @@ void CL_Plugins_MapLoad( const char *mapName )
 			PLUGIN_RUN( p, "OnMapLoad", ODFC_Call_OnMapLoad( p->vm, name ) );
 		}
 	}
+}
+
+// the start of a client frame: a snapshot of the game a plugin asked for is applied now
+void CL_Plugins_BeforeFrame( void )
+{
+	const int handle = stateApplyHandle;
+
+	if ( !handle ) {
+		return;
+	}
+	stateApplyHandle = 0;
+	if ( cls.state != CA_ACTIVE || clc.demoplaying || !SV_StateApply( handle ) ) {
+		return;
+	}
+	stateWait = qtrue;
+	stateWaitMsg = clc.serverMessageSequence;
+}
+
+// Called by CL_ParseSnapshot with every snapshot it makes current: the first one after an applied game snapshot is on the new
+// timeline, so the client clock and the view are set to it. This is before the client sends its next usercmds, which must have
+// the new time (the server throws them away until then).
+void CL_Plugins_StateSnapshot( void )
+{
+	int i;
+
+	if ( !stateWait ) {
+		return;
+	}
+	if ( cls.state != CA_ACTIVE || clc.demoplaying ) {
+		stateWait = qfalse;
+		return;
+	}
+	if ( cl.snap.messageNum - stateWaitMsg <= 0 ) {
+		return;
+	}
+	stateWait = qfalse;
+	stateNotify = qtrue;
+	stateOldTime = cl.serverTime;
+
+	cl.serverTime = cl.oldServerTime = cl.oldFrameServerTime = cl.snap.serverTime;
+	cl.serverTimeDelta = cl.snap.serverTime - cls.realtime;
+	cl.extrapolatedSnapshot = qfalse;
+
+	// The usercmds of the old timeline are in the ring still. The server skips them (they are not newer than the last one it ran), but
+	// the cgame looks at the oldest one to see whether the server answers ("Connection Interrupted" when it is newer than the last
+	// command the server ran) and predicts with the ones newer than that. Time 0 is "long ago" for both.
+	for ( i = 0; i < CMD_BACKUP; i++ ) {
+		cl.cmds[i].serverTime = 0;
+	}
+
+	// the server turned the player by delta_angles: what the mouse has to say is the rest
+	for ( i = 0; i < 3; i++ ) {
+		cl.viewangles[i] = SHORT2ANGLE( ANGLE2SHORT( cl.snap.ps.viewangles[i] ) - cl.snap.ps.delta_angles[i] );
+	}
+}
+
+// Called by CL_SetCGameTime: after the clock was reset (above) the cgame and the plugins are told that time went back.
+void CL_Plugins_StateNotify( void )
+{
+	if ( !stateNotify ) {
+		return;
+	}
+	stateNotify = qfalse;
+	if ( cls.state != CA_ACTIVE || clc.demoplaying ) {
+		return;
+	}
+	CL_CGameTimeChange( cl.snap.serverTime, cl.snap.messageNum, clc.lastExecutedServerCommand );
+	CL_Plugins_DemoSeek( stateOldTime, cl.snap.serverTime );
 }
 
 // the demo that is playing jumped (cl_demoseek.c)
@@ -1395,6 +1660,7 @@ void CL_Plugins_CGameShutdown( void )
 		}
 	}
 	mapLoaded = qfalse;
+	GhostPaths_Free();
 }
 
 // called with the refdef of the game's 3D scene right before it is rendered

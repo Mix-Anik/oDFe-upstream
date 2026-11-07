@@ -27,6 +27,7 @@ cap world     what the player's own game shows: snapshots, predicted state, map 
 cap draw      adding to the 3D scene and drawing on the HUD
 cap command   console commands
 cap sound     being asked about every sound the game starts
+cap state     saving and restoring the state of a local game (devmap)
 
 # ---------------------------------------------------------------------------
 # general
@@ -75,6 +76,31 @@ import PointContents( point: in(float,3) ) -> i32 cap world
 # The weapons and ammunition of the watched player. Returns 0 under the same conditions as GetPlayerState.
 import GetWeaponState( out: out(odfcWeaponState_t) ) -> i32 cap world
 
+# The stats and persistant arrays of the watched player, as the game module predicts them. Returns 0 under the same conditions as
+# GetPlayerState.
+import GetPlayerStats( out: out(odfcPlayerStats_t) ) -> i32 cap world
+
+# ---------------------------------------------------------------------------
+# snapshots of the game
+# ---------------------------------------------------------------------------
+
+# Saves the whole state of the running game: everything the game module knows (entities, triggers, items, movers, the race
+# timer, its random numbers), the server clock and the doors. Only for a local game (devmap) with cheats, a QVM game module and
+# no other player; returns a handle (greater than 0) or 0. flags must be 0. A snapshot takes a few KB (it is stored as the
+# difference to the first one of the game); the sv_stateMemory cvar limits the total. A handle is valid until the game module
+# is shut down or restarted (map change, map_restart) or the plugin stops.
+import SnapshotCreate( flags: i32 ) -> i32 cap state cheat
+
+# Puts the game back as it was when the snapshot was created: the player is where it was, with the same speed, weapons and
+# timer, and everything else in the level too. The server clock goes back, so time goes backwards for everything: OnDemoSeek is
+# called with the old and the new time when the client has the first frame of the new timeline. Returns 1 when it is going to
+# happen (at the start of the next frame, never inside a call of the plugin), 0 if the handle is not valid or the game does not
+# support it (the cgame has to be one that takes time changes, like the oDFs one).
+import SnapshotApply( handle: i32, flags: i32 ) -> i32 cap state cheat
+
+# Frees a snapshot (also the memory of all of them when the plugin stops).
+import SnapshotFree( handle: i32 ) cap state
+
 # ---------------------------------------------------------------------------
 # drawing
 # ---------------------------------------------------------------------------
@@ -118,6 +144,16 @@ handler CommandHandler( argc: i32, argv: strv(argc) )
 # the plugin stops.
 import CommandRegister( name: str, handler: fn(CommandHandler) ) -> i32 cap command
 
+# The path of a ghost that the game plays or has played (DeFRaG replay ghost, slot 0 to 4): the position of the player at every
+# sample of the recording, which is the best run the ghost was made from. It stays after the ghost has stopped, until the next
+# ghost of that slot, and is read in the background, so numPoints grows for a moment after a ghost has started. Returns 0 when the
+# slot has no path (or the game module does not publish ghosts: only the oDFs one does). raceMs is the exact time of the run the
+# ghost was recorded from when the game module knows it (the best run on record), else 0.
+import GetGhostInfo( slot: i32, out: out(odfcGhostInfo_t) ) -> i32 cap world
+
+# Copies count points of the path of a slot, from point number first on, into out. Returns the number copied.
+import GetGhostPath( slot: i32, first: i32, count: i32, out: out(odfcGhostPoint_t,count) ) -> i32 cap world
+
 # ---------------------------------------------------------------------------
 # what the plugin offers the engine
 # ---------------------------------------------------------------------------
@@ -146,6 +182,7 @@ export OnDraw2D( phase: i32 )
 # snapshots seen so far (-1 if it has not been in one) and ownClientNum the watched player.
 export OnFilterSound( entityNum: i32, isLoop: i32, entityClientNum: i32, ownClientNum: i32 ) -> i32 cap sound
 
-# The position of the demo that is playing was changed (seek, rewind, scrub). fromTime and toTime are server times in ms. Time can
-# go backwards: drop what you kept about the frames after toTime. Not called outside demos.
+# The position of the game was changed: a demo that is playing was moved (seek, rewind, scrub), or a snapshot of the game was
+# applied (SnapshotApply). fromTime and toTime are server times in ms. Time can go backwards: drop what you kept about the frames
+# after toTime.
 export OnDemoSeek( fromTime: i32, toTime: i32 )

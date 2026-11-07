@@ -23,6 +23,7 @@ call (engine functions) and what it can implement for the engine to call (export
 //   draw       adding to the 3D scene and drawing on the HUD
 //   command    console commands
 //   sound      being asked about every sound the game starts
+//   state      saving and restoring the state of a local game (devmap)
 // A function marked 'cheats only' does nothing and returns 0 unless cheats are allowed (see CheatsEnabled): the engine
 // decides, not the plugin.
 
@@ -96,6 +97,33 @@ int PointContents( const float *point );
 // Capability: world
 int GetWeaponState( odfcWeaponState_t *out );
 
+// The stats and persistant arrays of the watched player, as the game module predicts them. Returns 0 under the same conditions as
+// GetPlayerState.
+// Capability: world
+int GetPlayerStats( odfcPlayerStats_t *out );
+
+// Saves the whole state of the running game: everything the game module knows (entities, triggers, items, movers, the race
+// timer, its random numbers), the server clock and the doors. Only for a local game (devmap) with cheats, a QVM game module and
+// no other player; returns a handle (greater than 0) or 0. flags must be 0. A snapshot takes a few KB (it is stored as the
+// difference to the first one of the game); the sv_stateMemory cvar limits the total. A handle is valid until the game module
+// is shut down or restarted (map change, map_restart) or the plugin stops.
+// Capability: state
+// Cheats only.
+int SnapshotCreate( int flags );
+
+// Puts the game back as it was when the snapshot was created: the player is where it was, with the same speed, weapons and
+// timer, and everything else in the level too. The server clock goes back, so time goes backwards for everything: OnDemoSeek is
+// called with the old and the new time when the client has the first frame of the new timeline. Returns 1 when it is going to
+// happen (at the start of the next frame, never inside a call of the plugin), 0 if the handle is not valid or the game does not
+// support it (the cgame has to be one that takes time changes, like the oDFs one).
+// Capability: state
+// Cheats only.
+int SnapshotApply( int handle, int flags );
+
+// Frees a snapshot (also the memory of all of them when the plugin stops).
+// Capability: state
+void SnapshotFree( int handle );
+
 // Returns a shader handle (0 is the default shader, which is also what a missing shader gives). Valid until OnCgameShutdown.
 // Only works from OnMapLoad on.
 // Capability: draw
@@ -137,6 +165,18 @@ void DrawModel( float x, float y, float w, float h, int model, const float *orig
 // Capability: command
 int CommandRegister( const char *name, odfcCommandHandler_t handler );
 
+// The path of a ghost that the game plays or has played (DeFRaG replay ghost, slot 0 to 4): the position of the player at every
+// sample of the recording, which is the best run the ghost was made from. It stays after the ghost has stopped, until the next
+// ghost of that slot, and is read in the background, so numPoints grows for a moment after a ghost has started. Returns 0 when the
+// slot has no path (or the game module does not publish ghosts: only the oDFs one does). raceMs is the exact time of the run the
+// ghost was recorded from when the game module knows it (the best run on record), else 0.
+// Capability: world
+int GetGhostInfo( int slot, odfcGhostInfo_t *out );
+
+// Copies count points of the path of a slot, from point number first on, into out. Returns the number copied.
+// Capability: world
+int GetGhostPath( int slot, int first, int count, odfcGhostPoint_t *out );
+
 
 // ---------------------------------------------------------------------------
 // Exports: implement the ones you need with exactly these prototypes and list them in the EXPORTS
@@ -168,8 +208,9 @@ void OnDraw2D( int phase );
 // Capability: sound
 int OnFilterSound( int entityNum, int isLoop, int entityClientNum, int ownClientNum );
 
-// The position of the demo that is playing was changed (seek, rewind, scrub). fromTime and toTime are server times in ms. Time can
-// go backwards: drop what you kept about the frames after toTime. Not called outside demos.
+// The position of the game was changed: a demo that is playing was moved (seek, rewind, scrub), or a snapshot of the game was
+// applied (SnapshotApply). fromTime and toTime are server times in ms. Time can go backwards: drop what you kept about the frames
+// after toTime.
 void OnDemoSeek( int fromTime, int toTime );
 
 #endif // ODFC_H
