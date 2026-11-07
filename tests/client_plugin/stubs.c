@@ -45,6 +45,21 @@ qboolean SV_StateApply( int handle ) { stStateApplies++; return handle == stStat
 void SV_StateFree( int handle ) { (void)handle; stStateFrees++; }
 void SV_StateFreeOwner( int owner ) { stStateFreeOwnerCalls++; stStateFreeOwner = owner; }
 int SV_StateOwner( int handle ) { return handle == stStateHandle ? stStateOwnerOf : 0; }
+
+// ---- the demo that is recorded in segments (cl_demoroute.c) ----
+int stRouteCreated, stRouteCreatedHandle, stRouteApplied, stRouteAppliedHandle, stRouteKnown = 1, stRouteRestarts;
+void DemoRoute_Created( int handle ) { stRouteCreated++; stRouteCreatedHandle = handle; }
+qboolean DemoRoute_Applied( int handle ) { stRouteApplied++; stRouteAppliedHandle = handle; return stRouteKnown ? qtrue : qfalse; }
+void CL_DemoRouteRestart( void ) { stRouteRestarts++; }
+
+// ---- the demo calls of the plugin API (cl_main.c) ----
+int stDemoRecords, stDemoStops, stDemoStopDiscard, stDemoSaves, stDemoRecordResult = 1;
+char stDemoSavedName[160];
+qboolean CL_PluginDemoRecord( void ) { stDemoRecords++; return stDemoRecordResult ? qtrue : qfalse; }
+qboolean CL_PluginDemoStop( qboolean discard ) { stDemoStops++; stDemoStopDiscard = discard; return qtrue; }
+qboolean CL_PluginDemoSave( const char *name ) { stDemoSaves++; Q_strncpyz( stDemoSavedName, name, sizeof( stDemoSavedName ) ); return qtrue; }
+void CL_PluginDemoState( int *recording, int *segments, int *mine, int *bytes ) { *recording = 1; *segments = 1; *mine = 1; *bytes = 4242; }
+
 qboolean CLDemo_CgameSeekable( void ) { return stSeekable ? qtrue : qfalse; }
 void CL_CGameTimeChange( int serverTime, int snapshotNum, int serverCommandSequence )
 {

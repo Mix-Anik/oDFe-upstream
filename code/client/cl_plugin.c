@@ -8,6 +8,7 @@ the sandbox in plugin_vm.c). A plugin has no files, no network and no way to tou
 */
 
 #include "client.h"
+#include "cl_demoroute.h"
 #include "../qcommon/cm_public.h"
 #include "../qcommon/plugin_vm.h"
 #include "../plugin_api/include/odfc_types.h"
@@ -380,7 +381,14 @@ static int Imp_SnapshotCreate( int flags )
 	if ( flags || clc.demoplaying || cls.state != CA_ACTIVE ) {
 		return 0;
 	}
-	return SV_StateCreate( PluginOwner() );
+	{
+		const int handle = SV_StateCreate( PluginOwner() );
+
+		if ( handle && clc.demoRoute ) {
+			DemoRoute_Created( handle );		// the demo being recorded is cut here
+		}
+		return handle;
+	}
 }
 
 static int Imp_SnapshotApply( int handle, int flags )
@@ -650,6 +658,31 @@ static int Imp_GetPlayerStats( odfcPlayerStats_t *out )
 	for ( i = 0; i < ODFC_MAX_PERSISTANT; i++ ) {
 		out->persistant[i] = publishedPS.persistant[i];
 	}
+	return 1;
+}
+
+// the demo of the plugin (cl_main.c)
+static int Imp_DemoRecord( void )
+{
+	return CL_PluginDemoRecord() ? 1 : 0;
+}
+
+static int Imp_DemoStop( int discard )
+{
+	return CL_PluginDemoStop( discard ? qtrue : qfalse ) ? 1 : 0;
+}
+
+static int Imp_DemoSave( const char *name )
+{
+	return name && CL_PluginDemoSave( name ) ? 1 : 0;
+}
+
+static int Imp_DemoState( odfcDemoState_t *out )
+{
+	if ( !out ) {
+		return 0;
+	}
+	CL_PluginDemoState( &out->recording, &out->segments, &out->mine, &out->bytes );
 	return 1;
 }
 
@@ -1573,6 +1606,16 @@ void CL_Plugins_BeforeFrame( void )
 	}
 	stateWait = qtrue;
 	stateWaitMsg = clc.serverMessageSequence;
+
+	// the demo that is recorded goes on from the checkpoint: what was recorded since is given up, and the messages of the old timeline
+	// that are still on their way are not recorded
+	if ( clc.demoRoute ) {
+		if ( DemoRoute_Applied( handle ) ) {
+			clc.demowaiting = qtrue;
+		} else {
+			CL_DemoRouteRestart();
+		}
+	}
 }
 
 // Called by CL_ParseSnapshot with every snapshot it makes current: the first one after an applied game snapshot is on the new

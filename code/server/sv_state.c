@@ -63,6 +63,7 @@ static struct {
 } baseline;
 
 static state_t		states[MAX_STATES];
+void ( *sv_stateFreed )( int handle );
 static int			nextHandle = 1;
 static int			totalBytes;
 static cvar_t		*sv_stateMemory;
@@ -132,6 +133,9 @@ static void State_Release( state_t *st )
 {
 	int i;
 
+	if ( sv_stateFreed && st->handle ) {
+		sv_stateFreed( st->handle );
+	}
 	totalBytes -= State_Bytes( st );
 	for ( i = 0; i < NUM_REGIONS; i++ ) {
 		if ( st->diff[i].data ) {
@@ -497,6 +501,9 @@ qboolean SV_StateApply( int handle )
 	cl->lastUsercmd = st->lastUsercmd;
 	cl->deltaStart = cl->netchan.outgoingSequence;
 	cl->stateWait = qtrue;
+
+	// a demo that is recorded has the cut in it (cl_demoroute.h): this says so to whoever watches it
+	SV_SendServerCommand( cl, "print \"^3[SNAPSHOT LOAD]^7 game put back to server time %i\n\"", st->time );
 	return qtrue;
 }
 

@@ -14,11 +14,12 @@
 #define ODFC_CAP_command	( 1u << 2 )
 #define ODFC_CAP_sound	( 1u << 3 )
 #define ODFC_CAP_state	( 1u << 4 )
+#define ODFC_CAP_demo	( 1u << 5 )
 #define ODFC_CAPS_RESTRICTED	( 0 )
-static const char *const odfc_capNames[] = { "world", "draw", "command", "sound", "state" };
-#define ODFC_NUM_CAPS	5
+static const char *const odfc_capNames[] = { "world", "draw", "command", "sound", "state", "demo" };
+#define ODFC_NUM_CAPS	6
 
-#define ODFC_NUM_IMPORTS	34
+#define ODFC_NUM_IMPORTS	38
 
 // The functions the engine implements, written by hand. The host also has to define
 //   static qboolean ODF_CheatsAllowed( void );   the rule for the functions marked cheat
@@ -56,6 +57,10 @@ static void Imp_DrawModel( float x, float y, float w, float h, int model, const 
 static int Imp_CommandRegister( const char *name, int handler );
 static int Imp_GetGhostInfo( int slot, odfcGhostInfo_t *out );
 static int Imp_GetGhostPath( int slot, int first, int count, odfcGhostPoint_t *out );
+static int Imp_DemoRecord( void );
+static int Imp_DemoStop( int discard );
+static int Imp_DemoSave( const char *name );
+static int Imp_DemoState( odfcDemoState_t *out );
 
 static ID_INLINE float Odf_ArgFloat( intptr_t arg )
 {
@@ -386,6 +391,47 @@ static intptr_t Odfc_Dispatch( pluginVM_t *vm, intptr_t *args )
 				PluginVM_Ptr( vm, args[4], (unsigned)args[3] * sizeof( odfcGhostPoint_t ), ODF_ALIGNOF( odfcGhostPoint_t ) < 4 ? ODF_ALIGNOF( odfcGhostPoint_t ) : 4, qfalse, (void **)&p_out );
 			}
 			return Imp_GetGhostPath( (int)args[1], (int)args[2], (int)args[3], p_out );
+		}
+		case 34: {		// DemoRecord
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_demo ) ) {
+				PluginVM_Denied( vm, "DemoRecord", "demo" );
+				return 0;
+			}
+			if ( !ODF_CheatsAllowed() ) {
+				return 0;		// cheats only
+			}
+			return Imp_DemoRecord(  );
+		}
+		case 35: {		// DemoStop
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_demo ) ) {
+				PluginVM_Denied( vm, "DemoStop", "demo" );
+				return 0;
+			}
+			if ( !ODF_CheatsAllowed() ) {
+				return 0;		// cheats only
+			}
+			return Imp_DemoStop( (int)args[1] );
+		}
+		case 36: {		// DemoSave
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_demo ) ) {
+				PluginVM_Denied( vm, "DemoSave", "demo" );
+				return 0;
+			}
+			if ( !ODF_CheatsAllowed() ) {
+				return 0;		// cheats only
+			}
+			const char * p_name = NULL;
+			PluginVM_String( vm, args[1], qfalse, &p_name );
+			return Imp_DemoSave( p_name );
+		}
+		case 37: {		// DemoState
+			if ( !( PluginVM_Caps( vm ) & ODFC_CAP_demo ) ) {
+				PluginVM_Denied( vm, "DemoState", "demo" );
+				return 0;
+			}
+			odfcDemoState_t * p_out = NULL;
+			PluginVM_Ptr( vm, args[1], sizeof( odfcDemoState_t ), ODF_ALIGNOF( odfcDemoState_t ) < 4 ? ODF_ALIGNOF( odfcDemoState_t ) : 4, qfalse, (void **)&p_out );
+			return Imp_DemoState( p_out );
 		}
 		default:
 			PluginVM_Trap( vm, "called a function the engine does not have" );

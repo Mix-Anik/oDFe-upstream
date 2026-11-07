@@ -337,6 +337,112 @@ static void TestStateApi( void )
 	cl_connectedToCheatServer = 0;
 }
 
+// a demo that is recorded in segments (cl_demoroute.c): the snapshots of the game cut it
+static void TestDemoRoute( void )
+{
+	printf( "demo route\n" );
+	stStateCreates = stStateApplies = 0;
+	stRouteCreated = stRouteApplied = stRouteRestarts = 0;
+	stStateOwnerOf = stStateCreateOwner;
+	cl_connectedToCheatServer = 1;
+	clc.demoRoute = qfalse;
+	clc.demowaiting = qfalse;
+
+	// a normal recording is not told about the snapshots
+	mock->snapOp = 1;
+	Frame2D();
+	CHECK( mock->snapResult == stStateHandle && stRouteCreated == 0, "no route: no cut (%d)", stRouteCreated );
+
+	clc.demoRoute = qtrue;
+	mock->snapOp = 1;
+	Frame2D();
+	CHECK( stRouteCreated == 1 && stRouteCreatedHandle == stStateHandle, "a snapshot cuts the demo that is recorded in segments (%d, handle %d)", stRouteCreated, stRouteCreatedHandle );
+	stStateOwnerOf = stStateCreateOwner;
+	stStateHandle = 7;
+
+	// the apply: the route goes on from the snapshot, the messages of the old timeline are not recorded
+	mock->snapOp = 2;
+	mock->snapArg = stStateHandle;
+	Frame2D();
+	CHECK( stRouteApplied == 0, "nothing before the next frame" );
+	cls.state = CA_ACTIVE;
+	clc.serverMessageSequence = 60;
+	CL_Plugins_BeforeFrame();
+	CHECK( stStateApplies == 1 && stRouteApplied == 1 && stRouteAppliedHandle == stStateHandle && clc.demowaiting && stRouteRestarts == 0,
+		"applied: route told %d, waiting %d, restarts %d", stRouteApplied, clc.demowaiting, stRouteRestarts );
+
+	// a snapshot the demo has no route to: the demo starts again
+	clc.demowaiting = qfalse;
+	stRouteKnown = 0;
+	mock->snapOp = 2;
+	Frame2D();
+	CL_Plugins_BeforeFrame();
+	CHECK( stRouteApplied == 2 && stRouteRestarts == 1, "no route: the demo restarts (%d)", stRouteRestarts );
+	stRouteKnown = 1;
+
+	// without a recording in segments nothing of this happens
+	clc.demoRoute = qfalse;
+	mock->snapOp = 2;
+	Frame2D();
+	CL_Plugins_BeforeFrame();
+	CHECK( stRouteApplied == 2 && stStateApplies == 3, "no route: not told" );
+
+	// the client gets the first snapshot of the new timeline
+	cl.snap.messageNum = 99;
+	cl.snap.serverTime = 3000;
+	CL_Plugins_StateSnapshot();
+	CL_Plugins_StateNotify();
+	cl_connectedToCheatServer = 0;
+}
+
+// the demo calls of the API: only with cheats, a name goes through as it is, the state is a plain read
+static void TestDemoApi( void )
+{
+	printf( "demo calls\n" );
+	stDemoRecords = stDemoStops = stDemoSaves = 0;
+
+	cl_connectedToCheatServer = 0;
+	mock->demoOp = 1;
+	Frame2D();
+	CHECK( mock->demoResult == 0 && stDemoRecords == 0, "DemoRecord without cheats (%d, calls %d)", mock->demoResult, stDemoRecords );
+	mock->demoOp = 2;
+	mock->demoArg = 1;
+	Frame2D();
+	CHECK( mock->demoResult == 0 && stDemoStops == 0, "DemoStop without cheats" );
+	mock->demoOp = 3;
+	strcpy( mock->demoName, "st1[tas.cpm]0.07.468" );
+	Frame2D();
+	CHECK( mock->demoResult == 0 && stDemoSaves == 0, "DemoSave without cheats" );
+	mock->demoOp = 4;
+	memset( &mock->demoState, 0, sizeof( mock->demoState ) );
+	Frame2D();
+	CHECK( mock->demoResult == 1 && mock->demoState.recording == 1 && mock->demoState.segments == 1 && mock->demoState.mine == 1 && mock->demoState.bytes == 4242,
+		"DemoState is not limited by cheats (%d, bytes %d)", mock->demoResult, mock->demoState.bytes );
+
+	cl_connectedToCheatServer = 1;
+	mock->demoOp = 1;
+	Frame2D();
+	CHECK( mock->demoResult == 1 && stDemoRecords == 1, "DemoRecord with cheats (%d, calls %d)", mock->demoResult, stDemoRecords );
+	stDemoRecordResult = 0;
+	mock->demoOp = 1;
+	Frame2D();
+	CHECK( mock->demoResult == 0 && stDemoRecords == 2, "DemoRecord that could not start" );
+	stDemoRecordResult = 1;
+	mock->demoOp = 2;
+	mock->demoArg = 1;
+	Frame2D();
+	CHECK( mock->demoResult == 1 && stDemoStops == 1 && stDemoStopDiscard == 1, "DemoStop( discard ): %d, %d", stDemoStops, stDemoStopDiscard );
+	mock->demoOp = 2;
+	mock->demoArg = 0;
+	Frame2D();
+	CHECK( stDemoStops == 2 && stDemoStopDiscard == 0, "DemoStop( keep )" );
+	mock->demoOp = 3;
+	strcpy( mock->demoName, "st1[tas.cpm]0.07.468" );
+	Frame2D();
+	CHECK( mock->demoResult == 1 && stDemoSaves == 1 && !strcmp( stDemoSavedName, "st1[tas.cpm]0.07.468" ), "DemoSave: '%s'", stDemoSavedName );
+	cl_connectedToCheatServer = 0;
+}
+
 static void TestLoading( void )
 {
 	printf( "loading\n" );
@@ -1175,6 +1281,8 @@ int main( int argc, char **argv )
 	TestV4();
 	TestGhostPath();
 	TestStateApi();
+	TestDemoRoute();
+	TestDemoApi();
 	TestMapChange();
 	Frame3D();
 	CHECK( !mock->ghostInfoOk, "a ghost path survived the end of the game module" );

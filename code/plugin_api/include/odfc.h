@@ -24,6 +24,7 @@ call (engine functions) and what it can implement for the engine to call (export
 //   command    console commands
 //   sound      being asked about every sound the game starts
 //   state      saving and restoring the state of a local game (devmap)
+//   demo       recording a demo of a game with cheats and saving it under a name
 // A function marked 'cheats only' does nothing and returns 0 unless cheats are allowed (see CheatsEnabled): the engine
 // decides, not the plugin.
 
@@ -176,6 +177,35 @@ int GetGhostInfo( int slot, odfcGhostInfo_t *out );
 // Copies count points of the path of a slot, from point number first on, into out. Returns the number copied.
 // Capability: world
 int GetGhostPath( int slot, int first, int count, odfcGhostPoint_t *out );
+
+// The demo recorded by the plugin. It is a recording of its own (demos/temp/plugin.dm_*), apart from the ones the player starts
+// with the record command: a plugin can only stop and save the recording it started. All of these only work while cheats are allowed.
+//
+// Starts recording (nothing is said on the screen or the console). Returns 1 when a recording is going now, 0 when none was
+// started: there is one already, no game is running, or a demo is playing. In a local game with cheats the recording is made of
+// segments (one for each SnapshotCreate), so loading a snapshot (SnapshotApply) does not end it and the demo that is saved is the
+// route to where the player is now, without the attempts that were given up.
+// Capability: demo
+// Cheats only.
+int DemoRecord( void );
+
+// Stops the recording the plugin started. With discard not 0 the demo is thrown away. Returns 1 when there was such a recording.
+// Capability: demo
+// Cheats only.
+int DemoStop( int discard );
+
+// Writes the demo recorded so far (the route to the current position) to demos/<name>.dm_68 and goes on recording. The name may
+// have folders; letters, digits and _ - . ( ) [ ] + , # are allowed, anything else (or .. at the start of a folder or a file, a
+// name that starts with a dot or a slash) is refused. A file that is there is replaced. A demo of a game with cheats always has
+// the word tas (as a word of its own, like [tas.cpm]) in its name: the engine adds [tas] when the name has none. Only for a
+// recording made of segments. Returns 1 when the file was written.
+// Capability: demo
+// Cheats only.
+int DemoSave( const char *name );
+
+// Fills *out with what is being recorded. Not limited by cheats.
+// Capability: demo
+int DemoState( odfcDemoState_t *out );
 
 
 // ---------------------------------------------------------------------------

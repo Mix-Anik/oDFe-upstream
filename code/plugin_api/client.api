@@ -28,6 +28,7 @@ cap draw      adding to the 3D scene and drawing on the HUD
 cap command   console commands
 cap sound     being asked about every sound the game starts
 cap state     saving and restoring the state of a local game (devmap)
+cap demo      recording a demo of a game with cheats and saving it under a name
 
 # ---------------------------------------------------------------------------
 # general
@@ -153,6 +154,28 @@ import GetGhostInfo( slot: i32, out: out(odfcGhostInfo_t) ) -> i32 cap world
 
 # Copies count points of the path of a slot, from point number first on, into out. Returns the number copied.
 import GetGhostPath( slot: i32, first: i32, count: i32, out: out(odfcGhostPoint_t,count) ) -> i32 cap world
+
+# The demo recorded by the plugin. It is a recording of its own (demos/temp/plugin.dm_*), apart from the ones the player starts
+# with the record command: a plugin can only stop and save the recording it started. All of these only work while cheats are allowed.
+#
+# Starts recording (nothing is said on the screen or the console). Returns 1 when a recording is going now, 0 when none was
+# started: there is one already, no game is running, or a demo is playing. In a local game with cheats the recording is made of
+# segments (one for each SnapshotCreate), so loading a snapshot (SnapshotApply) does not end it and the demo that is saved is the
+# route to where the player is now, without the attempts that were given up.
+import DemoRecord() -> i32 cap demo cheat
+
+# Stops the recording the plugin started. With discard not 0 the demo is thrown away. Returns 1 when there was such a recording.
+import DemoStop( discard: i32 ) -> i32 cap demo cheat
+
+# Writes the demo recorded so far (the route to the current position) to demos/<name>.dm_68 and goes on recording. The name may
+# have folders; letters, digits and _ - . ( ) [ ] + , # are allowed, anything else (or .. at the start of a folder or a file, a
+# name that starts with a dot or a slash) is refused. A file that is there is replaced. A demo of a game with cheats always has
+# the word tas (as a word of its own, like [tas.cpm]) in its name: the engine adds [tas] when the name has none. Only for a
+# recording made of segments. Returns 1 when the file was written.
+import DemoSave( name: str ) -> i32 cap demo cheat
+
+# Fills *out with what is being recorded. Not limited by cheats.
+import DemoState( out: out(odfcDemoState_t) ) -> i32 cap demo
 
 # ---------------------------------------------------------------------------
 # what the plugin offers the engine

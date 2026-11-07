@@ -227,6 +227,7 @@ typedef struct {
 	qboolean	demorecording;
 	qboolean	demoplaying;
 	qboolean	demowaiting;	// don't record until a non-delta message is received
+	qboolean	demoRoute;		// the demo that is recorded is made of segments (cl_demoroute.h)
 	qboolean	firstDemoFrameSkipped;
 	fileHandle_t	demofile;
 	fileHandle_t	recordfile;
@@ -497,6 +498,14 @@ qboolean SV_StateApply( int handle );
 void SV_StateFree( int handle );
 void SV_StateFreeOwner( int owner );
 int SV_StateOwner( int handle );
+qboolean SV_StateAvailable( void );
+extern void ( *sv_stateFreed )( int handle );
+void CL_DemoRouteRestart( void );
+// the demo calls of the plugin API (cl_main.c)
+qboolean CL_PluginDemoRecord( void );
+qboolean CL_PluginDemoStop( qboolean discard );
+qboolean CL_PluginDemoSave( const char *name );
+void CL_PluginDemoState( int *recording, int *segments, int *mine, int *bytes );
 void CL_Plugins_StateSnapshot( void );
 void CL_Plugins_StateNotify( void );
 qboolean CLDemo_CgameSeekable( void );

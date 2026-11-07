@@ -30,6 +30,9 @@ extern int stTraceBoxCalls;		// traces with a box (mins/maxs not NULL)
 extern int stStateHandle, stStateOwnerOf;
 extern int stStateCreates, stStateCreateOwner, stStateApplies, stStateFrees, stStateFreeOwnerCalls, stStateFreeOwner;
 extern int stSeekable;
+extern int stDemoRecords, stDemoStops, stDemoStopDiscard, stDemoSaves, stDemoRecordResult;
+extern char stDemoSavedName[160];
+extern int stRouteCreated, stRouteCreatedHandle, stRouteApplied, stRouteAppliedHandle, stRouteKnown, stRouteRestarts;
 extern int stTimeChangeCalls, stTimeChangeArgs[3];
 
 void Test_SetCvar( const char *name, const char *value, int flags );

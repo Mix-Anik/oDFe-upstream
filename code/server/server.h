@@ -438,6 +438,7 @@ void		SV_StateFreeOwner( int owner );
 int			SV_StateOwner( int handle );
 int			SV_StateTotalBytes( void );
 qboolean	SV_StateAvailable( void );
+extern void ( *sv_stateFreed )( int handle );		// set by the client: a snapshot is gone
 
 qboolean	SV_inPVS (const vec3_t p1, const vec3_t p2);
 

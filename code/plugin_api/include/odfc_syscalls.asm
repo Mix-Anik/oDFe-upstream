@@ -36,3 +36,7 @@ equ	DrawModel		-31
 equ	CommandRegister		-32
 equ	GetGhostInfo		-33
 equ	GetGhostPath		-34
+equ	DemoRecord		-35
+equ	DemoStop		-36
+equ	DemoSave		-37
+equ	DemoState		-38

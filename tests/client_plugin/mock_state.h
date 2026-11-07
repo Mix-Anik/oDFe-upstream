@@ -62,6 +62,9 @@ typedef struct {
 
 	int				snapOp, snapArg, snapFlags;	// set by the test: 1 SnapshotCreate, 2 SnapshotApply( snapArg ), 3 SnapshotFree( snapArg ), made in the next Draw2D
 	int				snapResult;
+	int				demoOp, demoArg, demoResult;	// set by the test: 1 DemoRecord, 2 DemoStop( demoArg ), 3 DemoSave( demoName ), 4 DemoState, made in the next Draw2D
+	char			demoName[160];
+	odfcDemoState_t	demoState;
 	int				seekCalls, seekFrom, seekTo;	// OnDemoSeek
 } mockState_t;
 

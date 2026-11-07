@@ -255,6 +255,16 @@ void OnDraw2D( int phase )
 		st.snapResult = 0;
 	}
 	st.snapOp = 0;
+	if ( st.demoOp == 1 ) {
+		st.demoResult = DemoRecord();
+	} else if ( st.demoOp == 2 ) {
+		st.demoResult = DemoStop( st.demoArg );
+	} else if ( st.demoOp == 3 ) {
+		st.demoResult = DemoSave( st.demoName );
+	} else if ( st.demoOp == 4 ) {
+		st.demoResult = DemoState( &st.demoState );
+	}
+	st.demoOp = 0;
 	TryDrawing2D();
 	TryDrawing3D();		// not allowed here
 	if ( st.modelHandle ) {

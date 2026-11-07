@@ -184,6 +184,14 @@ typedef struct {
 	int		raceMs;			// the exact race time of the run the ghost was recorded from (a best run: its time is on record), 0: not known
 } odfcGhostInfo_t;
 
+// What DemoState says about the demo that is recorded.
+typedef struct {
+	int		recording;		// a demo is being recorded (any: the player's own too)
+	int		segments;		// it is made of segments (a local game with cheats), so DemoSave works
+	int		mine;			// the plugin started it (DemoRecord), so DemoStop and DemoSave work on it
+	int		bytes;			// the size of the route so far, when it is made of segments
+} odfcDemoState_t;
+
 #define ODFC_MAX_SNAPSHOT_ENTITIES	256
 
 typedef struct {
