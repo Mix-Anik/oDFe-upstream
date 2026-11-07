@@ -10,8 +10,11 @@ Generates the plugin API from its description (client.api, server.api).
 
   python gen_api.py            writes the files
   python gen_api.py --check    fails if the files on disk are not what the descriptions generate
+  python gen_api.py --json DIR writes DIR/client.json and DIR/server.json: the descriptions as data, for the documentation
+                               site (it formats them itself)
 """
 
+import json
 import os
 import re
 import sys
@@ -52,6 +55,8 @@ class Func:
         self.budget = budget
         self.doc = doc
         self.handler = None       # the Handler this export calls (exports made for handler types)
+        self.section = None       # the heading of the block of the description it is in (for the documentation)
+        self.seq = 0              # its place in the description
 
 
 class Handler:
@@ -60,6 +65,8 @@ class Handler:
         self.name = name
         self.params = params
         self.doc = doc
+        self.section = None
+        self.seq = 0
 
 
 class Api:
@@ -71,6 +78,8 @@ class Api:
         self.caps = []            # (name, restricted, doc)
         self.funcs = []
         self.events = []          # (name, cap, doc)
+        self.event_section = None
+        self.seq = 0
 
 
 def split_args(text):
@@ -128,7 +137,14 @@ def parse_params(text):
     return params
 
 
-def parse_into(api, path):
+def section_title(doc):
+    """The text of a heading in a description: a line between two lines of dashes."""
+    if len(doc) >= 3 and doc[0].startswith("---") and doc[-1].startswith("---"):
+        return " ".join(doc[1:-1]).strip()
+    return None
+
+
+def parse_into(api, path, section=None):
     doc = []
     sig = re.compile(r"^(import|export)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*(.*)$")
     with open(path, encoding="utf-8") as f:
@@ -136,6 +152,7 @@ def parse_into(api, path):
     for raw in lines:
         line = raw.rstrip()
         if not line.strip():
+            section = section_title(doc) or section
             doc = []
             continue
         if line.startswith("#"):
@@ -159,7 +176,10 @@ def parse_into(api, path):
                 budget = mm.group(1)
             if cheat and kind != "import":
                 raise SystemExit("%s: only an import can be marked cheat" % name)
-            api.funcs.append(Func(kind, name, parse_params(args), ret, cap, cheat, budget, [d for d in doc]))
+            fn = Func(kind, name, parse_params(args), ret, cap, cheat, budget, [d for d in doc])
+            api.seq += 1
+            fn.section, fn.seq = section, api.seq
+            api.funcs.append(fn)
             doc = []
             continue
         tok = line.split(None, 1)
@@ -170,13 +190,16 @@ def parse_into(api, path):
         elif tok[0] == "types":
             api.types = tok[1].strip()
         elif tok[0] == "include":
-            parse_into(api, os.path.join(os.path.dirname(path), tok[1].strip()))
+            parse_into(api, os.path.join(os.path.dirname(path), tok[1].strip()), section)
             doc = []
         elif tok[0] == "handler":
             mh = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*", tok[1])
             if not mh:
                 raise SystemExit("cannot parse: " + line)
-            api.handlers.append(Handler(mh.group(1), parse_params(mh.group(2)), [d for d in doc]))
+            h = Handler(mh.group(1), parse_params(mh.group(2)), [d for d in doc])
+            api.seq += 1
+            h.section, h.seq = section, api.seq
+            api.handlers.append(h)
             doc = []
         elif tok[0] == "cap":
             rest = tok[1].split(None, 1)
@@ -191,6 +214,7 @@ def parse_into(api, path):
             rest = tok[1].split()
             cap = rest[2] if len(rest) >= 3 and rest[1] == "cap" else None
             api.events.append((rest[0], cap, [d for d in doc]))
+            api.event_section = api.event_section or section
             doc = []
         else:
             raise SystemExit("cannot parse: " + line)
@@ -636,6 +660,43 @@ def gen_inc(api, src):
     return "\n".join(o)
 
 
+def c_params(params, M):
+    """[{type, name}] of the C parameters a plugin sees (a 64 bit number is two of them)."""
+    out = []
+    for p in params:
+        if p.kind == "i64":
+            out += [{"type": "unsigned", "name": p.name + "Lo"}, {"type": "unsigned", "name": p.name + "Hi"}]
+        else:
+            out.append({"type": plugin_ctype(p, M).strip(), "name": p.name})
+    return out
+
+
+def json_param(p, M):
+    return {"name": p.name, "kind": p.kind, "ctype": p.ctype, "count": p.count, "nullable": p.nullable,
+            "buffer": p.buffer, "cstr": p.cstr, "cType": plugin_ctype(p, M).strip()}
+
+
+def to_json(api, src):
+    """The description as plain data: what the documentation site renders. Handler types are listed apart from the functions
+    (the exports that call them are an internal detail and left out)."""
+    M = api.module
+    return {
+        "source": src,
+        "module": M,
+        "version": api.version,
+        "caps": [{"name": n, "restricted": r, "doc": t} for n, r, t in api.caps],
+        "handlers": [{"name": h.name, "section": h.section, "seq": h.seq, "doc": h.doc,
+                      "typeName": handler_type(M, h.name), "params": [json_param(p, M) for p in h.params],
+                      "c": {"ret": "void", "params": c_params(h.params, M)}} for h in api.handlers],
+        "funcs": [{"name": f.name, "kind": f.kind, "section": f.section, "seq": f.seq, "cap": f.cap, "cheat": f.cheat,
+                   "budget": f.budget, "doc": f.doc, "params": [json_param(p, M) for p in f.params],
+                   "c": {"ret": ret_ctype(f) if f.kind == "import" else ("int" if f.ret else "void"),
+                         "params": c_params(f.params, M)}} for f in api.funcs if not f.handler],
+        "eventSection": api.event_section,
+        "events": [{"name": n, "cap": c, "doc": d} for n, c, d in api.events],
+    }
+
+
 def outputs(sources=None, base=HERE):
     res = {}
     for src, inc in sources or SOURCES:
@@ -648,6 +709,17 @@ def outputs(sources=None, base=HERE):
 
 
 def main():
+    if "--json" in sys.argv:
+        out = sys.argv[sys.argv.index("--json") + 1]
+        os.makedirs(out, exist_ok=True)
+        for src, _ in SOURCES:
+            api = parse(os.path.join(HERE, src))
+            name = os.path.splitext(src)[0] + ".json"
+            with open(os.path.join(out, name), "w", encoding="utf-8", newline="\n") as f:
+                json.dump(to_json(api, src), f, indent=1)
+                f.write("\n")
+            print("wrote " + os.path.splitext(src)[0] + ".json")
+        return
     check = "--check" in sys.argv
     bad = 0
     base = HERE

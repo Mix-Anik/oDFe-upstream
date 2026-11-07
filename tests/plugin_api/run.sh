@@ -11,6 +11,8 @@ Q=../../code/qcommon
 API=../../code/plugin_api
 
 $PYTHON $API/gen_api.py --check
+# the data the documentation site reads
+$PYTHON $API/gen_api.py --json "$OUT/json" > /dev/null
 $PYTHON $API/gen_api.py --api test.api "$OUT" > /dev/null
 
 "$Q3TOOLS/q3lcc" -S -DQ3_VM -I$API/include -I"$OUT/include" -I. -o "$OUT/qvm_plugin.asm" qvm_plugin.c
