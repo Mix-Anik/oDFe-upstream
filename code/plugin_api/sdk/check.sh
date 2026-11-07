@@ -13,6 +13,8 @@ cd "$here/examples"
 "$exe" --client -o "$out/hello.qvm" hello.c
 "$exe" --server -o "$out/hello_server.qvm" hello_server.c
 "$exe" --server -o "$out/hello_http.qvm" hello_http.c         # odf-build adds odf_http.c and odf_json.c by itself
+"$exe" --client -o "$out/speedometer.qvm" speedometer.c       # odf_draw.c
+"$exe" --server -o "$out/best_time.qvm" best_time.c
 "$exe" --client -o "$out/cmd_plugin.qvm" "$here/../../../tests/client_plugin/cmd_plugin.c"
 
 # a program with a mistake has to be refused
@@ -27,7 +29,7 @@ if [ -e "$out/bad.qvm" ]; then
 fi
 
 cd "$out"
-for f in hello.qvm hello_server.qvm hello_http.qvm cmd_plugin.qvm; do
+for f in hello.qvm hello_server.qvm hello_http.qvm speedometer.qvm best_time.qvm cmd_plugin.qvm; do
 	if command -v sha256sum > /dev/null 2>&1; then sum=$(sha256sum "$f"); else sum=$(shasum -a 256 "$f"); fi
 	echo "${sum%% *}  $f"
 done | tee sha256.txt

@@ -23,7 +23,8 @@ sdk/        this folder
   odf_lib.c      the C library: string.h, ctype.h, stdlib.h (strtol, strtof, qsort, rand), math.h, stdio.h (snprintf)
   odf_json.[ch]  a JSON writer and reader;  odf_http.[ch]  HTTP requests with a callback (server plugins)
   libc/          the headers of that library
-  examples/      hello.c (client), hello_server.c (server), hello_http.c (server, uses the libraries): the smallest plugins
+  examples/      hello.c (client), hello_server.c (server), hello_http.c (server, uses the libraries): the smallest plugins;
+                 speedometer.c (client: drawing, game state, cvars), best_time.c (server: events, chat commands, storage)
   check.sh       a smoke test of a built odf-build (the CI runs it on every system)
 toolchain/  the compiler (lcc), its preprocessor and the assembler (q3asm), as in ioquake3: see toolchain/README.md
 ```
