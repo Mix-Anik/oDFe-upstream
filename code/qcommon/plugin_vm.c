@@ -43,6 +43,7 @@ struct pluginVM_s {
 	char				error[256];
 	volatile qboolean	failed;
 	jmp_buf				*jmp;				// where a stopped plugin goes back to: the innermost call
+	int64_t				work;				// what is left of the allowance of engine work of the call that is running (PluginVM_Charge)
 	pluginVMStats_t		stats[PLUGIN_VM_MAX_EXPORTS];
 };
 
@@ -67,6 +68,36 @@ void PluginVM_Trap( pluginVM_t *p, const char *message )
 	if ( p->jmp ) {
 		Q_longjmp( *p->jmp, 1 );
 	}
+}
+
+
+void PluginVM_Charge( pluginVM_t *p, unsigned units )
+{
+	p->work -= units;
+	if ( p->work < 0 ) {
+		p->work = 0;
+		PluginVM_Trap( p, "call used up its allowance of engine work" );
+	}
+}
+
+
+void PluginVM_Abort( const char *message )
+{
+	pluginVM_t *p = pluginActive;
+
+	if ( p == NULL ) {
+		return;
+	}
+	if ( !p->failed ) {
+		char text[256];
+
+		p->failed = qtrue;
+		Com_sprintf( text, sizeof( text ), "the engine stopped with an error during a call: %s", message ? message : "" );
+		Q_strncpyz( p->error, text, sizeof( p->error ) );
+	}
+	// the jump buffers belong to calls that are gone now
+	p->jmp = NULL;
+	pluginActive = NULL;
 }
 
 
@@ -257,6 +288,8 @@ static qboolean CallEntry( pluginVM_t *p, int command, int budget, int *result )
 	pluginVM_t			*prevActive = pluginActive;
 	const int32_t		savedMeter = *Meter( p );
 	const int32_t		stackOnEntry = p->vm.programStack;
+	const int64_t		prevWork = p->work;
+	int64_t				work;
 	volatile qboolean	ok;
 	int32_t				args[MAX_VMMAIN_CALL_ARGS];
 	int32_t				r = 0;
@@ -269,6 +302,10 @@ static qboolean CallEntry( pluginVM_t *p, int command, int budget, int *result )
 	args[2] = 0;
 	args[3] = 0;
 
+	// a call inside a call (the plugin's code is running already) cannot have more than what is left of the outer one
+	work = budget > PLUGIN_VM_BUDGET_FRAME ? PLUGIN_VM_WORK_INIT : PLUGIN_VM_WORK_FRAME;
+	p->work = prevWork > 0 && prevWork < work ? prevWork : work;
+
 	p->jmp = &jb;
 	pluginActive = p;
 	if ( Q_setjmp( jb ) == 0 ) {
@@ -280,6 +317,7 @@ static qboolean CallEntry( pluginVM_t *p, int command, int budget, int *result )
 		p->vm.programStack = stackOnEntry;
 	}
 	*Meter( p ) = savedMeter;
+	p->work = prevWork;
 	pluginActive = prevActive;
 	p->jmp = prevJmp;
 

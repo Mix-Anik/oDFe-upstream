@@ -91,6 +91,10 @@ static qboolean			httpStarted;
 
 // The generated dispatcher calls ODF_CheatsAllowed() for a function marked "cheat" in server.api (there is none yet). Define it
 // when the first one is added: return Cvar_VariableIntegerValue( "sv_cheats" ) != 0;
+// What an engine function costs the allowance of the call that is running, besides the step it is (see plugin_vm.h). The units are
+// about 10 ns: a file operation is 2000, a byte copied 1/16 or 1/128 (file or memory).
+#define ODF_CHARGE( units_ ) 	do { 		if ( current && current->vm ) { 			PluginVM_Charge( current->vm, (unsigned)( units_ ) ); 		} 	} while ( 0 )
+
 #include "../plugin_api/generated/sv_plugin_api.inc"
 #include "../plugin_api/plugin_common_imp.h"
 
@@ -186,6 +190,7 @@ static int Imp_RandomBytes( char *buf, int len )
 	if ( !buf || len < 0 || len > 4096 ) {
 		return 0;
 	}
+	ODF_CHARGE( 500 + len / 8 );
 	return Sys_RandomBytes( (byte *)buf, len ) ? 1 : 0;
 }
 
@@ -454,6 +459,7 @@ static int Imp_HttpRequest( int method, const char *url, const char *headers, co
 		Com_Printf( S_COLOR_YELLOW "Plugin '%s': %s is not one of the hosts it may talk to\n", current->name, host );
 		return 0;
 	}
+	ODF_CHARGE( 10000 + bodyLen / 16 );
 	for ( i = 0; i < (int)ARRAY_LEN( httpCalls ); i++ ) {
 		if ( !httpCalls[i].id ) {
 			call = &httpCalls[i];
@@ -478,6 +484,7 @@ static int Imp_HttpBody( int id, int offset, char *out, int outSize )
 	if ( !current || id <= 0 || id != current->httpAnswer ) {
 		return 0;		// only the answer that is being handed over right now
 	}
+	ODF_CHARGE( 100 + outSize / 128 );
 	return SV_Http_Body( id, offset, out, outSize );
 }
 
@@ -579,6 +586,7 @@ static int Imp_StoreSize( const char *name )
 	if ( !current || !ValidStoreName( name ) ) {
 		return -1;
 	}
+	ODF_CHARGE( 2000 );
 	return FileSize( StorePath( current, name ) );
 }
 
@@ -590,6 +598,7 @@ static int Imp_StoreRead( const char *name, int offset, char *out, int outSize )
 	if ( !current || !ValidStoreName( name ) || offset < 0 || !out || outSize < 1 || outSize > STORE_MAX_CHUNK ) {
 		return -1;
 	}
+	ODF_CHARGE( 2000 + outSize / 16 );
 	f = Sys_FOpen( StorePath( current, name ), "rb" );
 	if ( !f ) {
 		return -1;
@@ -611,6 +620,7 @@ static int Imp_StoreWrite( const char *name, const char *data, int len, int appe
 	if ( !current || !ValidStoreName( name ) || len < 0 || len > STORE_MAX_CHUNK || ( len > 0 && !data ) ) {
 		return 0;
 	}
+	ODF_CHARGE( 2000 + len / 16 );
 	before = FileSize( StorePath( current, name ) );
 	after = ( append && before > 0 ? before : 0 ) + len;
 	if ( after > current->storeMaxFile || (long long)current->storeTotal - ( before > 0 ? before : 0 ) + after > current->storeMaxTotal ) {
@@ -638,6 +648,7 @@ static int Imp_StoreDelete( const char *name )
 	if ( !current || !ValidStoreName( name ) ) {
 		return 0;
 	}
+	ODF_CHARGE( 2000 );
 	size = FileSize( StorePath( current, name ) );
 	if ( size < 0 || remove( StorePath( current, name ) ) != 0 ) {
 		return 0;

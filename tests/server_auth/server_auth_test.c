@@ -655,10 +655,10 @@ int main( int argc, char **argv )
 	Act( trusted, "trusted", "stored", "b.txt", "", 0 );
 
 	// limits without a size in the grant: 4 MB a file, 8 MB all together (storefill says how many KB fit)
-	CHECK( Act( mock, "mock", "storefill", "big1", "", 0 ) == 4096, "a file in the store can be bigger than 4 MB or smaller than allowed (%d KB fit)", mock->actResult );
-	CHECK( Act( mock, "mock", "storefill", "big2", "", 0 ) == 4096, "the second file did not fit (%d KB)", mock->actResult );
-	CHECK( Act( mock, "mock", "storefill", "big3", "", 0 ) == 0, "more than 8 MB fit into the store" );
-	CHECK( Act( mock, "mock", "stored", "big1", "", 0 ) == 1 && Act( mock, "mock", "storefill", "big3", "", 0 ) == 4096, "deleting did not free the space" );
+	CHECK( Act( mock, "mock", "storefill", "big1", "8", 0 ) == 4096, "a file in the store can be bigger than 4 MB or smaller than allowed (%d KB fit)", mock->actResult );
+	CHECK( Act( mock, "mock", "storefill", "big2", "8", 0 ) == 4096, "the second file did not fit (%d KB)", mock->actResult );
+	CHECK( Act( mock, "mock", "storefill", "big3", "8", 0 ) == 0, "more than 8 MB fit into the store" );
+	CHECK( Act( mock, "mock", "stored", "big1", "", 0 ) == 1 && Act( mock, "mock", "storefill", "big3", "8", 0 ) == 4096, "deleting did not free the space" );
 	Act( mock, "mock", "stored", "big2", "", 0 );
 	Act( mock, "mock", "stored", "big3", "", 0 );
 
@@ -793,9 +793,9 @@ int main( int argc, char **argv )
 	tiny = State( "tiny" );
 
 	// storage=10m: one file can be 10 MB, and the 10 MB are all there is
-	CHECK( Act( big, "big", "storefill", "f1", "", 0 ) == 10240, "storage=10m: %d KB fit into one file", big->actResult );
-	CHECK( Act( big, "big", "storefill", "f2", "", 0 ) == 0, "storage=10m: more than 10 MB fit into the store" );
-	CHECK( Act( big, "big", "stored", "f1", "", 0 ) == 1 && Act( big, "big", "storefill", "f2", "", 0 ) == 10240, "storage=10m: deleting did not free the space" );
+	CHECK( Act( big, "big", "storefill", "f1", "16", 0 ) == 10240, "storage=10m: %d KB fit into one file", big->actResult );
+	CHECK( Act( big, "big", "storefill", "f2", "16", 0 ) == 0, "storage=10m: more than 10 MB fit into the store" );
+	CHECK( Act( big, "big", "stored", "f1", "", 0 ) == 1 && Act( big, "big", "storefill", "f2", "16", 0 ) == 10240, "storage=10m: deleting did not free the space" );
 	Act( big, "big", "stored", "f2", "", 0 );
 
 	// storage=100k: a plugin can be given less than the default, too

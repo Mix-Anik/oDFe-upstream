@@ -202,18 +202,22 @@ static void Act( const char *data )
 	} else if ( !Strcmp( action, "stored" ) ) {
 		st.actResult = StoreDelete( name );
 	} else if ( !Strcmp( action, "storefill" ) ) {
-		// appends 1 KB pieces until the engine says no (or 40 MB are in): how many KB fit
-		static char piece[1024];
-		int i, pieces = 0;
+		// appends pieces of text KB (1 to 16) until the engine says no (or 40 MB are in): how many KB fit. (Every append is a file
+		// operation, which costs the call a good part of its allowance of engine work: not thousands of them in one call.)
+		static char piece[16 * 1024];
+		int i, kb = ToInt( text ), pieces = 0;
 
+		if ( kb < 1 || kb > 16 ) {
+			kb = 1;
+		}
 		MemSet( piece, 'x', sizeof( piece ) );
-		for ( i = 0; i < 40 * 1024; i++ ) {
-			if ( !StoreWrite( name, piece, (int)sizeof( piece ), 1 ) ) {
+		for ( i = 0; i < 40 * 1024 / kb; i++ ) {
+			if ( !StoreWrite( name, piece, kb * 1024, 1 ) ) {
 				break;
 			}
 			pieces++;
 		}
-		st.actResult = pieces;
+		st.actResult = pieces * kb;
 	} else if ( !Strcmp( action, "http" ) ) {
 		st.actResult = HttpRequest( ToInt( client ), text,
 			"Authorization: Bearer secret\nContent-Type: application/json\nX-Evil: 1\nHost: elsewhere", "{}", 2, 5000,

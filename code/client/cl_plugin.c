@@ -88,6 +88,10 @@ static void GhostPaths_Free( void );
 
 static qboolean CheatsAllowed( void );
 #define ODF_CheatsAllowed CheatsAllowed
+// What an engine function costs the allowance of the call that is running, besides the step it is (see plugin_vm.h). The units are
+// about 10 ns: loading from disk is 10000, a snapshot of the game 100000, a byte copied 1/128.
+#define ODF_CHARGE( units_ ) 	do { 		if ( current && current->vm ) { 			PluginVM_Charge( current->vm, (unsigned)( units_ ) ); 		} 	} while ( 0 )
+
 #include "../plugin_api/generated/cl_plugin_api.inc"
 #include "../plugin_api/plugin_common_imp.h"
 
@@ -381,6 +385,7 @@ static int Imp_SnapshotCreate( int flags )
 	if ( flags || clc.demoplaying || cls.state != CA_ACTIVE ) {
 		return 0;
 	}
+	ODF_CHARGE( 100000 );
 	{
 		const int handle = SV_StateCreate( PluginOwner() );
 
@@ -583,6 +588,7 @@ static int Imp_RegisterShader( const char *name )
 	if ( !name || !*name || !mapLoaded ) {
 		return 0;
 	}
+	ODF_CHARGE( 10000 );
 	return re.RegisterShader( name );
 }
 
@@ -664,16 +670,19 @@ static int Imp_GetPlayerStats( odfcPlayerStats_t *out )
 // the demo of the plugin (cl_main.c)
 static int Imp_DemoRecord( void )
 {
+	ODF_CHARGE( 50000 );
 	return CL_PluginDemoRecord() ? 1 : 0;
 }
 
 static int Imp_DemoStop( int discard )
 {
+	ODF_CHARGE( 50000 );
 	return CL_PluginDemoStop( discard ? qtrue : qfalse ) ? 1 : 0;
 }
 
 static int Imp_DemoSave( const char *name )
 {
+	ODF_CHARGE( 1000000 );		// writes the whole demo
 	return name && CL_PluginDemoSave( name ) ? 1 : 0;
 }
 
@@ -719,6 +728,7 @@ static int Imp_GetGhostPath( int slot, int first, int count, odfcGhostPoint_t *o
 	if ( count > g->num - first ) {
 		count = g->num - first;
 	}
+	ODF_CHARGE( (unsigned)count * sizeof( *out ) / 128 );
 	Com_Memcpy( out, g->points + first, count * sizeof( *out ) );
 	return count;
 }
@@ -728,6 +738,7 @@ static int Imp_RegisterShaderNoMip( const char *name )
 	if ( !name || !*name || !mapLoaded ) {
 		return 0;
 	}
+	ODF_CHARGE( 10000 );
 	return re.RegisterShaderNoMip( name );
 }
 
@@ -736,6 +747,7 @@ static int Imp_RegisterModel( const char *name )
 	if ( !name || !*name || !mapLoaded ) {
 		return 0;
 	}
+	ODF_CHARGE( 10000 );
 	return re.RegisterModel( name );
 }
 

@@ -11,6 +11,8 @@ extern void test_Fill( void *dst, int count, int value );
 extern int test_Restricted( void );
 extern int test_Cheat( void );
 extern int test_Sum( const int *values, int count );
+extern void test_Slow( void );
+extern void test_Abort( void );
 
 extern int Hostile_JumpLoop( void );
 extern int Hostile_CallMid( void );
@@ -94,6 +96,14 @@ int vmMain( int command, int ioAddress, int unused1, int unused2 )
 			return Hostile_JumpLoop();
 		case 18:		// a call of an address in the middle of a function (hand written code)
 			return Hostile_CallMid();
+		case 19:		// engine functions that take long, as often as the plugin likes (the loop itself is cheap for the budget)
+			for ( i = 0; i < a[0]; i++ ) {
+				test_Slow();
+			}
+			return a[0];
+		case 20:		// an engine function that leaves the call with an error (Com_Error)
+			test_Abort();
+			return 0;
 		default:
 			return -12345;
 	}

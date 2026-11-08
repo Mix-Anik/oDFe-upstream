@@ -550,29 +550,38 @@ nextInstruction2:
 			break;
 
 		case OP_DIVI:
-			if ( metered && ( r0.i == 0 || r0.i == -1 ) ) {
-				VM_Fault( "program used a division the processor traps on (divisor 0, or -1 for signed division)" );
+			if ( metered && r0.i == 0 ) {
+				VM_Fault( "program used a division by zero" );
+			}
+			if ( r0.i == -1 ) {
+				// INT_MIN / -1 traps on the processor: do what the wrapping result is without dividing
+				*(--opStack) = (int32_t)( 0u - r1.u );
+				break;
 			}
 			*(--opStack) = r1.i / r0.i;
 			break;
 
 		case OP_DIVU:
 			if ( metered && r0.u == 0 ) {
-				VM_Fault( "program used a division the processor traps on (divisor 0, or -1 for signed division)" );
+				VM_Fault( "program used a division by zero" );
 			}
 			*(--opStack) = r1.u / r0.u;
 			break;
 
 		case OP_MODI:
-			if ( metered && ( r0.i == 0 || r0.i == -1 ) ) {
-				VM_Fault( "program used a division the processor traps on (divisor 0, or -1 for signed division)" );
+			if ( metered && r0.i == 0 ) {
+				VM_Fault( "program used a division by zero" );
+			}
+			if ( r0.i == -1 ) {
+				*(--opStack) = 0;
+				break;
 			}
 			*(--opStack) = r1.i % r0.i;
 			break;
 
 		case OP_MODU:
 			if ( metered && r0.u == 0 ) {
-				VM_Fault( "program used a division the processor traps on (divisor 0, or -1 for signed division)" );
+				VM_Fault( "program used a division by zero" );
 			}
 			*(--opStack) = r1.u % r0.u;
 			break;

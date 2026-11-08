@@ -7,6 +7,7 @@ interpreter: what a plugin can and cannot do.
 #include "qcommon.h"
 #include "plugin_vm.h"
 #include "stubs.h"
+#include <setjmp.h>
 
 static int checks, failures;
 
@@ -25,6 +26,7 @@ static int checks, failures;
 static void *image;
 static int imageSize;
 static int cheatsOn;
+static jmp_buf abortJmp;
 static const char *lastPrint;
 
 enum { CAP_RESTRICTED = 1, CAP_OTHER = 2 };
@@ -85,6 +87,13 @@ static intptr_t Dispatch( pluginVM_t *vm, intptr_t *args )
 			}
 			return sum;
 		}
+		case 7:			// an engine function that does a lot of work (a megabyte copied, a file written ...)
+			PluginVM_Charge( vm, 100000 );
+			return 0;
+		case 8:			// Com_Error: the engine leaves the call without returning to the plugin
+			PluginVM_Abort( "test error" );
+			Q_longjmp( abortJmp, 1 );
+			return 0;
 		default:
 			PluginVM_Trap( vm, "unknown engine function" );
 			return 0;
@@ -245,7 +254,11 @@ static void RunSuite( const char *label )
 	MustStop( 18, 0, 0, 100000, "bad location" );					// a call into the middle of a function
 	MustStop( 2, 0, 0, PLUGIN_VM_BUDGET_FRAME, "stack" );	// a function that calls itself
 	MustStop( 3, 10, 0, PLUGIN_VM_BUDGET_FRAME, "division" );
-	MustStop( 3, (int)0x80000000, -1, PLUGIN_VM_BUDGET_FRAME, "division" );
+	// a divisor of -1 is fine, also for INT_MIN, which the processor would fault on
+	MustReturn( 3, 12, -1, -12 );
+	MustReturn( 3, (int)0x80000000, -1, (int)0x80000000 );
+	MustReturn( 4, 12, -1, 0 );
+	MustReturn( 4, (int)0x80000000, -1, 0 );
 	MustStop( 4, 10, 0, PLUGIN_VM_BUDGET_FRAME, "division" );
 	MustStop( 11, 0x12345, 0, PLUGIN_VM_BUDGET_FRAME, "VM" );	// a jump to an address that is not code
 	MustStop( 11, 0x7FFFFFF0, 0, PLUGIN_VM_BUDGET_FRAME, "VM" );
@@ -259,6 +272,29 @@ static void RunSuite( const char *label )
 	MustStop( 6, 0x400, 2000000000, PLUGIN_VM_BUDGET_FRAME, "bad size" );
 	MustStop( 14, 100000, 0, PLUGIN_VM_BUDGET_FRAME, "outside the memory" );
 	MustStop( 8, 0x7FFFFFF0, 0, PLUGIN_VM_BUDGET_FRAME, "outside the memory" );
+
+	// the budget counts the steps of the plugin, not the work of the engine: that has an allowance of its own
+	MustReturn( 19, 40, 0, 40 );
+	MustStop( 19, 100000, 0, PLUGIN_VM_BUDGET_FRAME, "allowance" );
+
+	// an error that leaves the call through Com_Error: the plugin is stopped, nothing points into the stack that is gone
+	vm = Load( CAP_RESTRICTED | CAP_OTHER );
+	vm2 = Load( CAP_RESTRICTED | CAP_OTHER );
+	if ( vm && vm2 ) {
+		volatile int aborted = 0;
+
+		if ( Q_setjmp( abortJmp ) == 0 ) {
+			Call2( vm, 20, 0, 0, PLUGIN_VM_BUDGET_FRAME, &r );
+		} else {
+			aborted = 1;
+		}
+		CHECK( aborted, "the error did not leave the call" );
+		CHECK( ErrHas( vm, "engine stopped" ) && ErrHas( vm, "test error" ), "error: %s", PluginVM_Error( vm ) );
+		CHECK( !Call2( vm, 0, 1, 2, PLUGIN_VM_BUDGET_FRAME, &r ), "a plugin that was left by an error was called" );
+		CHECK( Call2( vm2, 0, 20, 22, PLUGIN_VM_BUDGET_FRAME, &r ) && r == 42, "the other plugin" );
+		PluginVM_Free( vm );
+		PluginVM_Free( vm2 );
+	}
 
 	// stores and block copies to any address stay in the memory of the plugin
 	MustReturn( 5, 0x7FFFFFF0, 0, 0x12345678 );

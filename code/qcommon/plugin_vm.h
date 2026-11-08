@@ -30,6 +30,14 @@ game modules (vm.c, vm_x86.c, vm_interpreted.c), with a budget of steps, which i
 #define PLUGIN_VM_BUDGET_INIT	100000000
 #define PLUGIN_VM_BUDGET_FRAME	5000000
 
+// The budget counts the steps of the plugin's own code, not the work the engine does for the functions it calls (a megabyte MemSet
+// or a file write in a loop is a step each). So a call also has an allowance of engine work, in units of about one step (some 10
+// nanoseconds). The functions of the engine that cost more than a step charge for what they do (PluginVM_Charge) before they do it, and
+// a call that spends its allowance is stopped like one that ran out of steps. It is counted, not timed: the same plugin is stopped
+// at the same place on a fast and on a slow disk.
+#define PLUGIN_VM_WORK_INIT		100000000
+#define PLUGIN_VM_WORK_FRAME	5000000
+
 typedef struct pluginVM_s pluginVM_t;
 
 // The engine side of the API. args[0] is the number of the function the plugin called, args[1...] its arguments as the
@@ -82,6 +90,10 @@ extern unsigned	pluginVMImportCalls;
 // set to run plugins in the interpreter even where there is a compiler for the processor (for finding bugs)
 extern int		pluginVMInterpret;
 
+// The engine is leaving a call of a plugin through Com_Error (a longjmp that skips the plugin's own bookkeeping): the plugin that
+// was running is stopped, and nothing keeps a pointer into the stack that is gone. Called by Com_Error, does nothing otherwise.
+void		PluginVM_Abort( const char *message );
+
 const char	*PluginVM_Error( const pluginVM_t *vm );		// "" while the plugin is fine
 void		PluginVM_Fail( pluginVM_t *vm, const char *message );	// for the engine to say why a call could not be made
 
@@ -98,5 +110,6 @@ void		PluginVM_Ptr( pluginVM_t *vm, intptr_t offset, unsigned size, unsigned ali
 void		PluginVM_String( pluginVM_t *vm, intptr_t offset, qboolean nullable, const char **out );
 void		PluginVM_Trap( pluginVM_t *vm, const char *message );		// stops the plugin
 void		PluginVM_Denied( pluginVM_t *vm, const char *function, const char *capability );	// a call without the capability
+void		PluginVM_Charge( pluginVM_t *vm, unsigned units );		// engine work done for the call that is running, stops the plugin when it is too much
 
 #endif // PLUGIN_VM_H

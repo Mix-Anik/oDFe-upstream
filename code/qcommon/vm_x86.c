@@ -1599,7 +1599,7 @@ static void BadCopy( void )
 
 static void BadDivide( void )
 {
-	VM_Fault( "program used a division the processor traps on (divisor 0, or -1 for signed division)" );
+	VM_Fault( "program used a division by zero" );
 }
 
 
@@ -3597,19 +3597,37 @@ __compile:
 					DROP( "incorrect register setup, rx_mask=%04x", build_rx_mask() );
 #endif
 				if ( vm->metered ) {
-					// the processor faults on a division by zero (and on INT_MIN / -1), which would take the whole process down
+					// the processor faults on a division by zero, which would take the whole process down
 					emit_test_rx( rx[0], rx[0] );					// test ecx, ecx
 					EmitString( "0F 84" );							// jz +funcOffset[ FUNC_DIVZ ]
 					Emit4( funcOffset[ FUNC_DIVZ ] - compiledOfs - 4 );
-					if ( ci->op == OP_DIVI || ci->op == OP_MODI ) {
-						emit_op_rx_imm32( X_CMP, rx[0], -1 );		// cmp ecx, -1
-						EmitString( "0F 84" );						// je +funcOffset[ FUNC_DIVZ ]
-						Emit4( funcOffset[ FUNC_DIVZ ] - compiledOfs - 4 );
-					}
 				}
 				if ( ci->op == OP_DIVI || ci->op == OP_MODI ) {
+					int skipDiv = -1, skipEnd = -1;
+
+					if ( vm->metered ) {
+						// INT_MIN / -1 faults as well: for -1 the result is known (-x, or 0 for the remainder), so do not divide
+						emit_op_rx_imm32( X_CMP, rx[0], -1 );		// cmp ecx, -1
+						Emit1( 0x75 );								// jne divide
+						Emit1( 0 );
+						skipDiv = compiledOfs - 1;
+						if ( ci->op == OP_DIVI ) {
+							emit_neg_rx( rx[1] );					// neg eax
+						} else {
+							emit_xor_rx( rx[2], rx[2] );			// xor edx, edx
+						}
+						Emit1( 0xEB );								// jmp done
+						Emit1( 0 );
+						skipEnd = compiledOfs - 1;
+						if ( code ) {
+							code[ skipDiv ] = compiledOfs - ( skipDiv + 1 );
+						}
+					}
 					emit_cdq();						// cdq
 					emit_idiv_rx( rx[0] );			// idiv eax, ecx
+					if ( skipEnd >= 0 && code ) {
+						code[ skipEnd ] = compiledOfs - ( skipEnd + 1 );
+					}
 				} else {
 					emit_xor_rx( rx[2], rx[2] );	// xor edx, edx
 					emit_udiv_rx( rx[0] );			// div ecx

@@ -8,6 +8,11 @@ sv_plugin.c after the generated dispatcher. The dispatcher has checked the point
 #ifndef PLUGIN_COMMON_IMP_H
 #define PLUGIN_COMMON_IMP_H
 
+// The host defines ODF_CHARGE( units ) before it includes this: what the work costs the allowance of the call (see plugin_vm.h)
+#ifndef ODF_CHARGE
+#define ODF_CHARGE( units_ ) ( (void)0 )
+#endif
+
 static float Imp_Sin( float x )
 {
 	return sinf( x );
@@ -31,6 +36,7 @@ static float Imp_Sqrt( float x )
 static void Imp_MemSet( char *dst, int value, int size )
 {
 	if ( dst && size > 0 ) {
+		ODF_CHARGE( size / 128 );
 		memset( dst, value, size );
 	}
 }
@@ -38,6 +44,7 @@ static void Imp_MemSet( char *dst, int value, int size )
 static void Imp_MemCpy( char *dst, const char *src, int size )
 {
 	if ( dst && src && size > 0 ) {
+		ODF_CHARGE( size / 128 );
 		memmove( dst, src, size );
 	}
 }

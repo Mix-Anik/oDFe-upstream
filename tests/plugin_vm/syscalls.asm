@@ -7,3 +7,5 @@ equ	test_Fill			-4
 equ	test_Restricted		-5
 equ	test_Cheat			-6
 equ	test_Sum			-7
+equ	test_Slow			-8
+equ	test_Abort			-9
