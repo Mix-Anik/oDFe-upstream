@@ -330,7 +330,8 @@ void CL_StopRecord_f( void ) {
 CL_SaveDemo_f
 
 savedemo <name>: writes the demo that is recorded so far to demos/<name> and goes on recording. For a demo that is made of
-segments (a game with checkpoints), where it is the way to the checkpoint that is current.
+segments (a game with checkpoints), where it is the way to the checkpoint that is current. The name goes through
+DemoRoute_CleanName, as the name a plugin gives: characters of a file name only, and "tas" in it.
 ====================
 */
 static qboolean CL_SaveDemoTo( const char *demoName ) {
@@ -372,11 +373,21 @@ static qboolean CL_SaveDemoTo( const char *demoName ) {
 }
 
 static void CL_SaveDemo_f( void ) {
+	char clean[MAX_OSPATH];
+
 	if ( Cmd_Argc() != 2 ) {
 		Com_Printf( "savedemo <demoname>\n" );
 		return;
 	}
-	CL_SaveDemoTo( Cmd_Argv( 1 ) );
+	// the same rules as for a plugin: a name that stays in the demos folder, and "tas" in it (a route is a demo made with cheats)
+	if ( !DemoRoute_CleanName( Cmd_Argv( 1 ), clean, sizeof( clean ) ) ) {
+		Com_Printf( "The name cannot be used (letters, digits and _-.()[]+,# only, no .. and no leading . or /).\n" );
+		return;
+	}
+	if ( Q_stricmp( clean, Cmd_Argv( 1 ) ) ) {
+		Com_Printf( "Saving as %s\n", clean );
+	}
+	CL_SaveDemoTo( clean );
 }
 
 

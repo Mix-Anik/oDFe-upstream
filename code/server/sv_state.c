@@ -338,9 +338,12 @@ int SV_StateCreate( int owner )
 	}
 	if ( !sv_stateMemory ) {
 		sv_stateMemory = Cvar_Get( "sv_stateMemory", "32", CVAR_ARCHIVE );
+		Cvar_CheckRange( sv_stateMemory, "1", "1024", CV_INTEGER );		// the sizes are int: 2048 MB would not fit
 		Cvar_SetDescription( sv_stateMemory, "Memory (in MB) the snapshots of the running game may use (client plugin API)." );
 	}
-	limit = sv_stateMemory->integer * 1024 * 1024;
+	// the range is only checked when the cvar is set: a value from the config of an older version or a cvar that
+	// existed before is clamped here too
+	limit = Com_Clamp( 1, 1024, sv_stateMemory->integer ) * 1024 * 1024;
 
 	for ( i = 0; i < MAX_STATES; i++ ) {
 		if ( !states[i].handle ) {

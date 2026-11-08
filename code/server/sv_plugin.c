@@ -39,6 +39,7 @@ typedef char odfClientInfoSize_t[ sizeof( odfClientInfo_t ) == 144 ? 1 : -1 ];
 typedef char odfClientInfoAccount_t[ offsetof( odfClientInfo_t, accountIDLo ) == 100 ? 1 : -1 ];
 
 typedef enum {
+	PS_LOADING,		// being set up (a cleared slot): not called by anything until it is PS_RUNNING
 	PS_RUNNING,
 	PS_STOPPED,		// shut down normally
 	PS_FAILED,		// did not load or refused to start
@@ -1027,26 +1028,7 @@ static void Plugin_Load( const char *entry )
 		Plugin_Fail( p, "built for server plugin API %i, this server has %i", atoi( value ), ODFS_API_VERSION );
 		return;
 	}
-	// capabilities it asks for in its manifest: "caps=chat,auth"
-	if ( Manifest_Value( PluginVM_Manifest( p->vm ), "caps", value, sizeof( value ) ) ) {
-		const char *s = value;
-
-		while ( *s ) {
-			const char *end = s;
-			unsigned cap;
-
-			while ( *end && *end != ',' ) {
-				end++;
-			}
-			cap = CapByName( s, (int)( end - s ) );
-			if ( cap && !( p->caps & cap ) ) {
-				Plugin_Fail( p, "needs capabilities that were not granted: %.*s. If you trust it, list them: sv_plugins \"%s:%s\"",
-					(int)( end - s ), s, name, value );
-				return;
-			}
-			s = *end ? end + 1 : end;
-		}
-	}
+	// the capabilities it asks for in its manifest (caps=chat,auth) were checked by PluginVM_Load
 
 	if ( p->caps & ODFS_CAP_storage ) {
 		Store_Measure( p );
@@ -1069,7 +1051,7 @@ static void Plugin_Load( const char *entry )
 
 static void Plugins_List_f( void )
 {
-	static const char *const stateNames[] = { "running", "stopped", "failed", "stopped*" };
+	static const char *const stateNames[] = { "loading", "running", "stopped", "failed", "stopped*" };
 	int i, c;
 
 	// plugins stats: what the calls of every plugin cost (wall time, with the engine's work for its imports); plugins reset
