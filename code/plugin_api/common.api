@@ -1,0 +1,14 @@
+# Functions both kinds of plugin get. They are here because a plugin has no C library: the math and the bulk memory work are done
+# by the engine, which is also much faster than a loop in the plugin.
+
+# Math. Angles are in radians.
+import Sin( x: f32 ) -> f32
+import Cos( x: f32 ) -> f32
+import Atan2( y: f32, x: f32 ) -> f32
+import Sqrt( x: f32 ) -> f32
+
+# Fills size bytes at dst with the byte value.
+import MemSet( dst: outbuf(size), value: i32, size: i32 )
+
+# Copies size bytes from src to dst (they must not overlap).
+import MemCpy( dst: outbuf(size), src: inbuf(size), size: i32 )

@@ -227,6 +227,7 @@ typedef struct client_s {
 	netchan_buffer_t **netchan_end_queue;
 
 	int				oldServerTime;
+	qboolean		stateWait;		// a game snapshot was applied (sv_state.c): no usercmds before the client acknowledges the first message after it
 	qboolean		csUpdated[MAX_CONFIGSTRINGS];
 	qboolean		compat;
 
@@ -424,6 +425,21 @@ sharedEntity_t *SV_GEntityForSvEntity( svEntity_t *svEnt );
 void		SV_InitGameProgs ( void );
 void		SV_ShutdownGameProgs ( void );
 void		SV_RestartGameProgs( void );
+
+//
+// sv_state.c
+//
+void		SV_StateReset( void );
+int			SV_StateCreate( int owner );
+qboolean	SV_StateCanApply( int handle );
+qboolean	SV_StateApply( int handle );
+void		SV_StateFree( int handle );
+void		SV_StateFreeOwner( int owner );
+int			SV_StateOwner( int handle );
+int			SV_StateTotalBytes( void );
+qboolean	SV_StateAvailable( void );
+extern void ( *sv_stateFreed )( int handle );		// set by the client: a snapshot is gone
+
 qboolean	SV_inPVS (const vec3_t p1, const vec3_t p2);
 
 //
@@ -446,7 +462,7 @@ void SV_BotInitBotLib(void);
 
 //============================================================
 //
-// sv_plugin.c - native plugins, see odf_plugin_api.h
+// sv_plugin.c - sandboxed plugins, see code/plugin_api/server.api
 //
 
 void		SV_Plugins_Init( void );
@@ -478,6 +494,9 @@ qboolean	SV_Auth_ClientInfo( int clientNum, int *authState, int64_t *accountID, 
 //
 
 void SV_ClearWorld (void);
+int SV_WorldLinksSize( void );
+void SV_WorldLinksGet( byte *out );
+void SV_WorldLinksSet( const byte *in );
 // called after the world model has been loaded, before linking any entities
 
 void SV_UnlinkEntity( sharedEntity_t *ent );

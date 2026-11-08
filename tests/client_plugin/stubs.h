@@ -20,11 +20,20 @@ extern int stSoundCalls;
 extern int numAddedCommands;
 extern char addedCommands[32][32];
 extern xcommand_t addedCommandFn[32];
-extern char stCmdArgs[8][64];
+extern char stCmdArgs[24][256];
 extern int stCmdArgc;
 extern int stCvarFlagsLast;
 extern int stTraceCalls;
 extern int stTraceBoxCalls;		// traces with a box (mins/maxs not NULL)
+
+// the game snapshots (sv_state.c) and the cgame time change, as far as the plugin code uses them
+extern int stStateHandle, stStateOwnerOf;
+extern int stStateCreates, stStateCreateOwner, stStateApplies, stStateFrees, stStateFreeOwnerCalls, stStateFreeOwner;
+extern int stSeekable;
+extern int stDemoRecords, stDemoStops, stDemoStopDiscard, stDemoSaves, stDemoRecordResult;
+extern char stDemoSavedName[160];
+extern int stRouteCreated, stRouteCreatedHandle, stRouteApplied, stRouteAppliedHandle, stRouteKnown, stRouteRestarts;
+extern int stTimeChangeCalls, stTimeChangeArgs[3];
 
 void Test_SetCvar( const char *name, const char *value, int flags );
 

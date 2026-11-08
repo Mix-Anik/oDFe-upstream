@@ -74,6 +74,20 @@ typedef struct worldSector_s {
 static worldSector_t	sv_worldSectors[AREA_NODES];
 static int			sv_numworldSectors;
 
+// The lists of entities in the sectors, for the snapshots of the game (sv_state.c). The pointers in them point into sv.svEntities
+// and this array, which stay where they are as long as the map is loaded.
+int SV_WorldLinksSize( void ) {
+	return (int)sizeof( sv_worldSectors );
+}
+
+void SV_WorldLinksGet( byte *out ) {
+	Com_Memcpy( out, sv_worldSectors, sizeof( sv_worldSectors ) );
+}
+
+void SV_WorldLinksSet( const byte *in ) {
+	Com_Memcpy( sv_worldSectors, in, sizeof( sv_worldSectors ) );
+}
+
 
 /*
 ===============

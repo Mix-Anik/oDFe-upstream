@@ -1,0 +1,76 @@
+name: tests
+
+# The native tests of the engine (tests/*/run.sh, see docs/plugins.md): the plugin VM against hostile programs, the generated
+# dispatcher, the server and client plugin code against mock plugins, demo routes, the login protocol.
+# The tests that build QVM programs need q3lcc and q3asm. Those are the Windows programs in the bin folder of the oDFs
+# repository, so they run on Windows; the others also run on Linux.
+
+on:
+  pull_request:
+    paths:
+      - 'code/**'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'code/**'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: tests Windows x86_64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: base-devel mingw-w64-x86_64-gcc mingw-w64-x86_64-python
+        path-type: minimal
+        release: false
+        update: false
+        cache: false
+
+    - uses: actions/checkout@v7
+
+    - name: Checkout the QVM tools (q3lcc, q3asm)
+      uses: actions/checkout@v7
+      with:
+        repository: Mix-Anik/oDFs
+        path: oDFs
+
+    - name: Tests
+      run: |
+        export Q3TOOLS="$PWD/oDFs/bin"
+        failed=
+        for t in auth_proto game_state demo_route plugin_vm plugin_api plugin_layout plugin_sdk sdk_libs server_auth client_plugin; do
+          echo "::group::$t"
+          if PYTHON=python sh tests/$t/run.sh; then echo "$t: ok"; else echo "$t: FAILED"; failed="$failed $t"; fi
+          echo "::endgroup::"
+        done
+        if [ -n "$failed" ]; then echo "failed:$failed"; exit 1; fi
+
+  linux:
+    name: tests Linux x86_64 (without QVM tools)
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Tests
+      run: |
+        failed=
+        for t in auth_proto game_state demo_route plugin_sdk sdk_libs; do
+          echo "::group::$t"
+          if PYTHON=python3 sh tests/$t/run.sh; then echo "$t: ok"; else echo "$t: FAILED"; failed="$failed $t"; fi
+          echo "::endgroup::"
+        done
+        if [ -n "$failed" ]; then echo "failed:$failed"; exit 1; fi

@@ -167,6 +167,21 @@ int VM_CallInterpreted2( vm_t *vm, int nargs, int32_t *args ) {
 	int		opcode;
 	int32_t	*img;
 	int		i;
+	int32_t	budget;
+	const qboolean	metered = vm->metered;
+	// for a plugin: the places the calls come back to, and the top of the stack; its own return addresses are in its memory,
+	// where it can change them
+	int32_t	shadow[ ( PROGRAM_STACK_SIZE + PROGRAM_STACK_EXTRA ) / 8 + 8 ];
+	int		shadowDepth = 0;
+	int32_t	topStack;
+
+	// a plugin has a budget of steps (one step is worth 16 instructions), the others run as long as they like
+	if ( metered ) {
+		budget = *(int32_t *)( vm->dataBase - VM_METER_OFFSET );
+		budget = budget > 0x7FFFFFFF / 16 ? 0x7FFFFFFF : budget * 16;
+	} else {
+		budget = 0x7FFFFFFF;
+	}
 
 	// interpret the code
 	//vm->currentlyInterpreting = qtrue;
@@ -192,6 +207,7 @@ int VM_CallInterpreted2( vm_t *vm, int nargs, int32_t *args ) {
 	}
 	img[ 1 ] = 0; 	// return stack
 	img[ 0 ] = -1;	// will terminate the loop on return
+	topStack = programStack;
 
 	ci = inst;
 
@@ -204,6 +220,15 @@ int VM_CallInterpreted2( vm_t *vm, int nargs, int32_t *args ) {
 		r1.i = opStack[-1];
 
 nextInstruction2:
+
+		if ( --budget <= 0 ) {
+			if ( !metered ) {
+				budget = 0x7FFFFFFF;
+			} else {
+				*(int32_t *)( vm->dataBase - VM_METER_OFFSET ) = 0;
+				VM_Fault( "program used up its instruction budget" );
+			}
+		}
 
 		v0 = ci->value;
 		opcode = ci->op;
@@ -223,10 +248,10 @@ nextInstruction2:
 			// get size of stack frame
 			programStack -= v0;
 			if ( programStack < vm->stackBottom ) {
-				Com_Error( ERR_DROP, "VM programStack overflow" );
+				VM_Fault( "program tried to overflow program stack" );
 			}
 			if ( opStack + ((ci-1)->opStack/4) >= opStackTop ) {
-				Com_Error( ERR_DROP, "VM opStack overflow" );
+				VM_Fault( "program tried to overflow opcode stack" );
 			}
 			break;
 
@@ -234,13 +259,25 @@ nextInstruction2:
 			// remove our stack frame
 			programStack += v0;
 
-			// grab the saved program counter
-			v1 = *(int32_t *)&image[ programStack ];
+			if ( metered ) {
+				// the frames come and go in pairs, so this can only be above the top after a jump into another function
+				if ( programStack > topStack ) {
+					VM_Fault( "program tried to leave a function it is not in" );
+				}
+				// grab the saved program counter; it has to be the place the call came from
+				v1 = *(int32_t *)&image[ programStack ];
+				if ( shadowDepth == 0 ? v1 != -1 : v1 != shadow[ --shadowDepth ] ) {
+					VM_Fault( "program changed a return address" );
+				}
+			} else {
+				// grab the saved program counter
+				v1 = *(int32_t *)&image[ programStack ];
+			}
 			// check for leaving the VM
 			if ( v1 == -1 ) {
 				goto done;
 			} else if ( (unsigned)v1 >= vm->instructionCount ) {
-				Com_Error( ERR_DROP, "VM program counter out of range in OP_LEAVE" );
+				VM_Fault( "program tried to execute code outside VM (return)" );
 			}
 			ci = inst + v1;
 			break;
@@ -277,10 +314,20 @@ nextInstruction2:
 				*opStack = v0;
 			} else if ( r0.u < vm->instructionCount ) {
 				// vm call
+				if ( metered ) {
+					// a function starts with its OP_ENTER; calling any other place would skip what the function sets up
+					if ( inst[ r0.i ].op != OP_ENTER ) {
+						VM_Fault( "program tried to execute code at bad location inside VM" );
+					}
+					if ( shadowDepth >= ARRAY_LEN( shadow ) ) {
+						VM_Fault( "program tried to overflow program stack" );
+					}
+					shadow[ shadowDepth++ ] = ci - inst;
+				}
 				ci = inst + r0.i;
 				opStack--;
 			} else {
-				Com_Error( ERR_DROP, "VM program counter out of range in OP_CALL" );
+				VM_Fault( "program tried to execute code outside VM (call)" );
 			}
 			break;
 
@@ -307,7 +354,11 @@ nextInstruction2:
 
 		case OP_JUMP:
 			if ( r0.u >= vm->instructionCount ) {
-				Com_Error( ERR_DROP, "VM program counter out of range in OP_JUMP" );
+				VM_Fault( "program tried to execute code outside VM (jump)" );
+			}
+			if ( metered && !inst[ r0.i ].jused ) {
+				// only the places the program says it jumps to have an empty operand stack
+				VM_Fault( "program tried to execute code at bad location inside VM" );
 			}
 			ci = inst + r0.i;
 			opStack--;
@@ -456,6 +507,14 @@ nextInstruction2:
 				int		count, srci, desti;
 
 				count = v0;
+				if ( metered ) {
+					// the clamping below lets a copy run past the end of the data segment (and wraps to a huge count): a plugin that
+					// does it is stopped
+					if ( (uint32_t)r0.i > (uint32_t)dataMask || (uint32_t)r1.i > (uint32_t)dataMask ||
+						(uint64_t)(uint32_t)r0.i + (uint32_t)count > (uint64_t)dataMask + 1 || (uint64_t)(uint32_t)r1.i + (uint32_t)count > (uint64_t)dataMask + 1 ) {
+						VM_Fault( "program tried to copy memory outside its data segment" );
+					}
+				}
 				// MrE: copy range check
 				srci = r0.i & dataMask;
 				desti = r1.i & dataMask;
@@ -491,18 +550,39 @@ nextInstruction2:
 			break;
 
 		case OP_DIVI:
+			if ( metered && r0.i == 0 ) {
+				VM_Fault( "program used a division by zero" );
+			}
+			if ( r0.i == -1 ) {
+				// INT_MIN / -1 traps on the processor: do what the wrapping result is without dividing
+				*(--opStack) = (int32_t)( 0u - r1.u );
+				break;
+			}
 			*(--opStack) = r1.i / r0.i;
 			break;
 
 		case OP_DIVU:
+			if ( metered && r0.u == 0 ) {
+				VM_Fault( "program used a division by zero" );
+			}
 			*(--opStack) = r1.u / r0.u;
 			break;
 
 		case OP_MODI:
+			if ( metered && r0.i == 0 ) {
+				VM_Fault( "program used a division by zero" );
+			}
+			if ( r0.i == -1 ) {
+				*(--opStack) = 0;
+				break;
+			}
 			*(--opStack) = r1.i % r0.i;
 			break;
 
 		case OP_MODU:
+			if ( metered && r0.u == 0 ) {
+				VM_Fault( "program used a division by zero" );
+			}
 			*(--opStack) = r1.u % r0.u;
 			break;
 
@@ -605,10 +685,17 @@ done:
 	//vm->currentlyInterpreting = qfalse;
 
 	if ( opStack != &stack[2] ) {
+		if ( metered ) {
+			VM_Fault( "program returned with an unbalanced opcode stack" );
+		}
 		Com_Error( ERR_DROP, "Interpreter error: opStack = %ld", (long int) (opStack - stack) );
 	}
 
 	vm->programStack = stackOnEntry;
+
+	if ( metered ) {
+		*(int32_t *)( vm->dataBase - VM_METER_OFFSET ) = budget / 16;
+	}
 
 	// return the result
 	return *opStack;

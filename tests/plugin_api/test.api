@@ -1,0 +1,34 @@
+# A description for the tests of the generator: every kind of argument and every rule.
+
+module odft
+version 1
+types odft_types.h
+
+cap alpha   an ordinary group
+cap beta    restricted  a group that needs a grant
+
+import Plain( x: i32 ) -> i32
+import NeedsAlpha( x: i32 ) -> i32 cap alpha
+import CheatOnly( x: i32 ) -> i32 cheat
+import CheatAndBeta( x: i32 ) -> i32 cap beta cheat
+import FillBuf( buf: outbuf(n), n: i32 ) -> i32
+import ReadBuf( buf: inbuf(n), n: i32 ) -> i32
+import TwoStrings( a: str, b: str? ) -> i32
+import HalfOf( a: f32, b: f32 ) -> f32
+import Wide( id: i64, tag: i32 ) -> i32
+import Vec( v: in(float,3), w: out(float,3) ) -> i32
+import Nothing()
+
+# a function of the plugin the engine calls later
+handler PingHandler( a: i32, text: str )
+import Register( handler: fn(PingHandler) ) -> i32
+
+# a handler with a list of strings, like main( argc, argv )
+handler WordsHandler( argc: i32, argv: strv(argc) )
+import RegisterWords( handler: fn(WordsHandler) ) -> i32
+
+export OnPing( x: i32 ) -> i32
+export OnSay( text: str )
+export OnWithStruct( p: in(odftPair_t) ) -> i32
+
+include ../../code/plugin_api/common.api

@@ -184,6 +184,10 @@ typedef enum
 	FUNC_ERRJ,
 	FUNC_DATR,
 	FUNC_DATW,
+	FUNC_BUDG,
+	FUNC_DIVZ,
+	FUNC_BADC,
+	FUNC_BADO,
 	FUNC_LAST
 } func_t;
 
@@ -278,14 +282,18 @@ static void Emit8( int64_t v );
 #ifdef _MSC_VER
 #define DROP( reason, ... ) \
 	do { \
+		char dropMsg[256]; \
 		VM_FreeBuffers(); \
-		Com_Error( ERR_DROP, "%s: " reason, __func__, __VA_ARGS__ ); \
+		Com_sprintf( dropMsg, sizeof( dropMsg ), "%s: " reason, __func__, __VA_ARGS__ ); \
+		VM_Fault( dropMsg ); \
 	} while(0)
 #else
 #define DROP( reason, args... ) \
 	do { \
+		char dropMsg[256]; \
 		VM_FreeBuffers(); \
-		Com_Error( ERR_DROP, "%s: " reason, __func__, ##args ); \
+		Com_sprintf( dropMsg, sizeof( dropMsg ), "%s: " reason, __func__, ##args ); \
+		VM_Fault( dropMsg ); \
 	} while(0)
 #endif
 
@@ -1537,37 +1545,61 @@ static void store4_local( uint32_t value, uint32_t offset )
 
 static void ErrJump( void )
 {
-	Com_Error( ERR_DROP, "program tried to execute code outside VM" );
+	VM_Fault( "program tried to execute code outside VM" );
 }
 
 
 static void BadJump( void )
 {
-	Com_Error( ERR_DROP, "program tried to execute code at bad location inside VM" );
+	VM_Fault( "program tried to execute code at bad location inside VM" );
 }
 
 
 static void BadStack( void )
 {
-	Com_Error( ERR_DROP, "program tried to overflow program stack" );
+	VM_Fault( "program tried to overflow program stack" );
 }
 
 
 static void BadOpStack( void )
 {
-	Com_Error( ERR_DROP, "program tried to overflow opcode stack" );
+	VM_Fault( "program tried to overflow opcode stack" );
 }
 
 
 static void BadDataRead( void )
 {
-	Com_Error( ERR_DROP, "program tried to read out of data segment" );
+	VM_Fault( "program tried to read out of data segment" );
 }
 
 
 static void BadDataWrite( void )
 {
-	Com_Error( ERR_DROP, "program tried to write out of data segment" );
+	VM_Fault( "program tried to write out of data segment" );
+}
+
+
+static void OutOfBudget( void )
+{
+	VM_Fault( "program used up its instruction budget" );
+}
+
+
+static void BadOpcode( void )
+{
+	VM_Fault( "program executed a breakpoint or an undefined instruction" );
+}
+
+
+static void BadCopy( void )
+{
+	VM_Fault( "program tried to copy memory outside its data segment" );
+}
+
+
+static void BadDivide( void )
+{
+	VM_Fault( "program used a division by zero" );
 }
 
 
@@ -1577,13 +1609,40 @@ static void( *const badStackPtr )( void ) = BadStack;
 static void( *const badOpStackPtr )( void ) = BadOpStack;
 static void( *const badDataReadPtr )( void ) = BadDataRead;
 static void( *const badDataWritePtr )( void ) = BadDataWrite;
+static void( *const outOfBudgetPtr )( void ) = OutOfBudget;
+static void( *const badDividePtr )( void ) = BadDivide;
+static void( *const badCopyPtr )( void ) = BadCopy;
+static void( *const badOpcodePtr )( void ) = BadOpcode;
+
+// a metered program (a plugin): the instructions that are the target of a backward jump or of a jump table
+static byte *loopHeaders;
 
 
 static void VM_FreeBuffers( void )
 {
 	// should be freed in reversed allocation order
-	Z_Free( instructionOffsets );
-	Z_Free( inst );
+	if ( loopHeaders ) {
+		Z_Free( loopHeaders );
+		loopHeaders = NULL;
+	}
+	if ( instructionOffsets ) {
+		Z_Free( instructionOffsets );
+		instructionOffsets = NULL;
+	}
+	if ( inst ) {
+		Z_Free( inst );
+		inst = NULL;
+	}
+}
+
+
+// the compiler was left by a fault (a plugin with a program it cannot translate): gives back what it was working with
+void VM_CompileAbort( vm_t *vm )
+{
+	VM_FreeBuffers();
+	if ( vm->codeBase.ptr && !vm->destroy ) {
+		VM_Destroy_Compiled( vm );
+	}
 }
 
 
@@ -1981,9 +2040,14 @@ static void EmitCallFunc( vm_t *vm )
 
 	// calling another vm function
 #if idx64
-	emit_call_index( R_INSPOINTERS, R_EAX ); // call qword ptr [instructionPointers+rax*8]
+	if ( vm->metered ) {
+		// the table of call targets follows the one of jump targets
+		emit_op_reg_base_index( 0, 0xFF, 0x2, R_INSPOINTERS, R_EAX, sizeof( void* ), vm->instructionCount * sizeof( intptr_t ) );
+	} else {
+		emit_call_index( R_INSPOINTERS, R_EAX ); // call qword ptr [instructionPointers+rax*8]
+	}
 #else
-	emit_call_index_offset( (intptr_t)instructionPointers, R_EAX ); // call dword ptr [vm->instructionPointers + eax*8]
+	emit_call_index_offset( (intptr_t)instructionPointers + ( vm->metered ? vm->instructionCount * sizeof( intptr_t ) : 0 ), R_EAX ); // call dword ptr [vm->instructionPointers + eax*8]
 #endif
 
 	emit_ret();	// ret
@@ -2107,6 +2171,38 @@ static void EmitBCPYFunc( vm_t *vm )
 	emit_push( R_ESI );						// push esi
 	emit_push( R_EDI );						// push edi
 
+	if ( vm->metered ) {
+		// edx = source, eax = destination, ecx = number of dwords (below 2^28). The copy has to lie completely inside the data
+		// segment, which is below 2^30 bytes, so none of the sums below can overflow.
+		emit_op_rx_imm32( X_CMP, R_EDX, vm->dataMask );		// cmp edx, dataMask
+		EmitString( "0F 87" );								// ja +funcOffset[ FUNC_BADC ]
+		Emit4( funcOffset[ FUNC_BADC ] - compiledOfs - 4 );
+		emit_op_rx_imm32( X_CMP, R_EAX, vm->dataMask );		// cmp eax, dataMask
+		EmitString( "0F 87" );
+		Emit4( funcOffset[ FUNC_BADC ] - compiledOfs - 4 );
+		emit_mov_rx( R_ESI, R_ECX );							// mov esi, ecx
+		emit_shl_rx_imm( R_ESI, 2 );							// shl esi, 2  - the size in bytes
+		emit_add_rx( R_ESI, R_EDX );							// add esi, edx - end of the source
+		emit_op_rx_imm32( X_CMP, R_ESI, vm->dataMask + 1 );	// cmp esi, dataMask + 1
+		EmitString( "0F 87" );
+		Emit4( funcOffset[ FUNC_BADC ] - compiledOfs - 4 );
+		emit_mov_rx( R_ESI, R_ECX );
+		emit_shl_rx_imm( R_ESI, 2 );
+		emit_add_rx( R_ESI, R_EAX );							// add esi, eax - end of the destination
+		emit_op_rx_imm32( X_CMP, R_ESI, vm->dataMask + 1 );
+		EmitString( "0F 87" );
+		Emit4( funcOffset[ FUNC_BADC ] - compiledOfs - 4 );
+		emit_mov_rx( R_ESI, R_EDX );							// mov esi, edx
+		emit_mov_rx( R_EDI, R_EAX );							// mov edi, eax
+		emit_add_rx( R_ESI | R_REX, R_EBX );					// add rsi, rbx
+		emit_add_rx( R_EDI | R_REX, R_EBX );					// add rdi, rbx
+		EmitString( "F3 A5" );								// rep movsd
+		emit_pop( R_EDI );
+		emit_pop( R_ESI );
+		emit_ret();
+		return;
+	}
+
 	emit_mov_rx( R_ESI, R_EDX );			// mov esi, edx // top of opstack
 	emit_mov_rx( R_EDI, R_EAX );			// mov edi, eax // bottom of opstack
 
@@ -2218,6 +2314,31 @@ static void EmitDATWFunc( vm_t *vm )
 	mov_rx_ptr( R_EAX, &badDataWritePtr ); // mov eax, &badDataWritePtr
 	EmitString( "FF 10" );		// call [eax]
 	emit_ret();					// ret
+}
+
+
+// The functions below are reached from the code of a plugin and never return (the plugin is stopped). The stack is aligned
+// first because the code of the plugin keeps it at an arbitrary 8 byte boundary.
+static void EmitFaultFunc( const void *handlerPtr )
+{
+	mov_rx_ptr( R_EAX, handlerPtr );	// mov eax, &handlerPtr
+#if idx64
+	EmitString( "48 83 E4 F0" );		// and rsp, -16
+	EmitString( "48 83 EC 20" );		// sub rsp, 32
+#else
+	EmitString( "83 E4 F0" );			// and esp, -16
+#endif
+	EmitString( "FF 10" );				// call [eax]
+	emit_ret();							// ret
+}
+
+
+// Counts one step of a metered program (sub [dataBase - VM_METER_OFFSET], 1) and stops it when the budget is used up.
+static void EmitMeter( void )
+{
+	emit_op_mem_imm( X_SUB, R_DATABASE, -VM_METER_OFFSET, 1 );	// sub dword ptr [dataBase - 8], 1
+	EmitString( "0F 8E" );										// jle +funcOffset[ FUNC_BUDG ]
+	Emit4( funcOffset[ FUNC_BUDG ] - compiledOfs - 4 );
 }
 
 
@@ -2791,6 +2912,38 @@ qboolean VM_Compile( vm_t *vm, vmHeader_t *header ) {
 	VM_FindMOps( inst, vm->instructionCount );
 #endif
 
+	loopHeaders = NULL;
+	if ( vm->metered ) {
+		// A program can only run for ever by jumping backwards or by calling itself. Calls are counted where a function
+		// starts. A backward jump goes to a constant address (CONST, JUMP or a conditional jump), or - for a switch - to one of
+		// the jump table targets, so mark those and count where they are entered.
+		loopHeaders = (byte *)Z_Malloc( header->instructionCount + 8 );
+		for ( i = 0; i < header->instructionCount; i++ ) {
+			if ( ops[inst[i].op].flags & JUMP ) {
+				if ( inst[i].value <= i && inst[i].value >= 0 ) {
+					loopHeaders[ inst[i].value ] = 1;
+				}
+			} else if ( inst[i].op == OP_JUMP && i > 0 && inst[i-1].op == OP_CONST ) {
+				if ( inst[i-1].value <= i && inst[i-1].value >= 0 ) {
+					loopHeaders[ inst[i-1].value ] = 1;
+				}
+			}
+		}
+		for ( i = 0; i < vm->numJumpTableTargets; i++ ) {
+			if ( vm->jumpTableTargets[i] >= 0 && vm->jumpTableTargets[i] < header->instructionCount ) {
+				loopHeaders[ vm->jumpTableTargets[i] ] = 1;
+			}
+		}
+		// switch without a jump table (an old image): every instruction can be a label, count them all at the jumps
+		if ( vm->jumpTableTargets == NULL ) {
+			for ( i = 0; i < header->instructionCount; i++ ) {
+				if ( inst[i].jused ) {
+					loopHeaders[ i ] = 1;
+				}
+			}
+		}
+	}
+
 #if JUMP_OPTIMIZE
 	for ( i = 0; i < header->instructionCount; i++ ) {
 		if ( ops[inst[i].op].flags & JUMP ) {
@@ -2936,10 +3089,19 @@ __compile:
 
 		instructionOffsets[ ip++ ] = compiledOfs;
 
+		// a loop: count every time it is entered, this is what stops a program that never ends
+		if ( loopHeaders && loopHeaders[ ip - 1 ] && ci->op != OP_ENTER ) {
+			EmitMeter();
+		}
+
 		switch ( ci->op ) {
 
 			case OP_UNDEF:
-				emit_brk();			// int 3
+				if ( vm->metered ) {
+					EmitCallOffset( FUNC_BADO );
+				} else {
+					emit_brk();			// int 3
+				}
 				break;
 
 			case OP_IGNORE:
@@ -2947,7 +3109,11 @@ __compile:
 				break;
 
 			case OP_BREAK:
-				emit_brk();			// int 3
+				if ( vm->metered ) {
+					EmitCallOffset( FUNC_BADO );
+				} else {
+					emit_brk();			// int 3
+				}
 				break;
 
 			case OP_ENTER:
@@ -2984,6 +3150,9 @@ __compile:
 				emit_lea_base_index( R_PROCBASE | R_REX, R_DATABASE, R_PSTACK ); // procBase = dataBase + programStack
 
 				emit_CheckProc( vm, ci );
+				if ( vm->metered ) {
+					EmitMeter();
+				}
 #ifdef NUM_PROC_COMPRESSIONS
 				proc_compressions = 0;
 #endif
@@ -3065,6 +3234,10 @@ __compile:
 				break;
 
 			case OP_JUMP:
+				if ( vm->metered ) {
+					// a jump to an address the program computed can go back to any place it may jump to, not only to the marked ones
+					EmitMeter();
+				}
 				rx[0] = load_rx_opstack( R_EAX | RCONST ); dec_opstack(); // eax = *opstack; opstack -= 4
 				emit_CheckJump( vm, rx[0], proc_base, proc_len );		// check if eax is within current proc
 				flush_opstack();
@@ -3423,9 +3596,38 @@ __compile:
 				if ( rx[0] == rx[2] || rx[1] == rx[2] )
 					DROP( "incorrect register setup, rx_mask=%04x", build_rx_mask() );
 #endif
+				if ( vm->metered ) {
+					// the processor faults on a division by zero, which would take the whole process down
+					emit_test_rx( rx[0], rx[0] );					// test ecx, ecx
+					EmitString( "0F 84" );							// jz +funcOffset[ FUNC_DIVZ ]
+					Emit4( funcOffset[ FUNC_DIVZ ] - compiledOfs - 4 );
+				}
 				if ( ci->op == OP_DIVI || ci->op == OP_MODI ) {
+					int skipDiv = -1, skipEnd = -1;
+
+					if ( vm->metered ) {
+						// INT_MIN / -1 faults as well: for -1 the result is known (-x, or 0 for the remainder), so do not divide
+						emit_op_rx_imm32( X_CMP, rx[0], -1 );		// cmp ecx, -1
+						Emit1( 0x75 );								// jne divide
+						Emit1( 0 );
+						skipDiv = compiledOfs - 1;
+						if ( ci->op == OP_DIVI ) {
+							emit_neg_rx( rx[1] );					// neg eax
+						} else {
+							emit_xor_rx( rx[2], rx[2] );			// xor edx, edx
+						}
+						Emit1( 0xEB );								// jmp done
+						Emit1( 0 );
+						skipEnd = compiledOfs - 1;
+						if ( code ) {
+							code[ skipDiv ] = compiledOfs - ( skipDiv + 1 );
+						}
+					}
 					emit_cdq();						// cdq
 					emit_idiv_rx( rx[0] );			// idiv eax, ecx
+					if ( skipEnd >= 0 && code ) {
+						code[ skipEnd ] = compiledOfs - ( skipEnd + 1 );
+					}
 				} else {
 					emit_xor_rx( rx[2], rx[2] );	// xor edx, edx
 					emit_udiv_rx( rx[0] );			// div ecx
@@ -3594,6 +3796,28 @@ __compile:
 			EmitDATWFunc( vm );
 		}
 
+		if ( vm->metered ) {
+			// instruction budget used up
+			EmitAlign( FUNC_ALIGN );
+			funcOffset[FUNC_BUDG] = compiledOfs;
+			EmitFaultFunc( &outOfBudgetPtr );
+
+			// division the processor traps on
+			EmitAlign( FUNC_ALIGN );
+			funcOffset[FUNC_DIVZ] = compiledOfs;
+			EmitFaultFunc( &badDividePtr );
+
+			// block copy outside the data segment
+			EmitAlign( FUNC_ALIGN );
+			funcOffset[FUNC_BADC] = compiledOfs;
+			EmitFaultFunc( &badCopyPtr );
+
+			// breakpoint and undefined instructions (the processor would kill the whole process on them)
+			EmitAlign( FUNC_ALIGN );
+			funcOffset[FUNC_BADO] = compiledOfs;
+			EmitFaultFunc( &badOpcodePtr );
+		}
+
 		EmitAlign( sizeof( intptr_t ) ); // for instructionPointers
 
 #if JUMP_OPTIMIZE
@@ -3609,6 +3833,9 @@ __compile:
 	} // for( pass = 0; pass < n; pass++ )
 
 	n = header->instructionCount * sizeof( intptr_t );
+	if ( vm->metered ) {
+		n *= 2;			// the second half lists the places a call may go to (see below)
+	}
 
 	if ( code == NULL ) {
 #ifdef USE_LITERAL_POOL
@@ -3651,6 +3878,18 @@ __compile:
 			continue;
 		}
 		instructionPointers[ i ] = (intptr_t)vm->codeBase.ptr + instructionOffsets[ i ];
+	}
+
+	if ( vm->metered ) {
+		// A computed call (a function pointer) must go to the start of a function: anywhere else the code would return with
+		// the wrong stack. Jumps may go to many more places, so calls have a table of their own.
+		for ( i = 0; i < header->instructionCount; i++ ) {
+			if ( inst[i].jused && inst[i].op == OP_ENTER ) {
+				instructionPointers[ header->instructionCount + i ] = instructionPointers[ i ];
+			} else {
+				instructionPointers[ header->instructionCount + i ] = (intptr_t)badJumpPtr;
+			}
+		}
 	}
 
 	VM_FreeBuffers();

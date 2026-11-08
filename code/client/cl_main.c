@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_main.c  -- client main loop
 
 #include "client.h"
+#include "cl_demoroute.h"
 #include <limits.h>
 
 cvar_t	*cl_noprint;
@@ -218,8 +219,15 @@ CL_WriteDemoMessage
 Dumps the current net message, prefixed by the length
 ====================
 */
+static int	cl_preParseCmd;		// the number of the last server command before the message that is parsed
+
 static void CL_WriteDemoMessage( msg_t *msg, int headerBytes ) {
 	int		len, swlen;
+
+	if ( clc.demoRoute ) {
+		DemoRoute_Frame( clc.serverMessageSequence, msg->data + headerBytes, msg->cursize - headerBytes, cl_preParseCmd, clc.serverCommandSequence );
+		return;
+	}
 
 	// write the packet sequence
 	len = clc.serverMessageSequence;
@@ -234,6 +242,10 @@ static void CL_WriteDemoMessage( msg_t *msg, int headerBytes ) {
 }
 
 
+static qboolean	cl_demoQuiet;			// the plugin API records and stops without a word
+static qboolean	cl_demoDiscard;			// stop and delete the demo
+static qboolean	cl_pluginRecording;		// the recording was started by a plugin (DemoRecord)
+
 /*
 ====================
 CL_StopRecording_f
@@ -242,12 +254,23 @@ stop recording a demo
 ====================
 */
 void CL_StopRecord_f( void ) {
+	qboolean	discard = cl_demoDiscard;
 
 	if ( clc.recordfile != FS_INVALID_HANDLE ) {
 		char tempName[MAX_OSPATH];
 		char finalName[MAX_OSPATH];
 		int protocol;
 		int	len, sequence;
+
+		// a route (checkpoints of a plugin): the demo is made of the segments now
+		if ( clc.demoRoute ) {
+			if ( !discard && DemoRoute_Export( clc.recordfile ) < 0 ) {
+				Com_Printf( S_COLOR_YELLOW "The demo could not be written.\n" );
+			}
+			DemoRoute_Stopped();
+			clc.demoRoute = qfalse;
+			Cvar_Set2( "cl_demoRoute", "0", qtrue );		// read-only: only forced
+		}
 
 		// finish up
 		len = -1;
@@ -283,16 +306,141 @@ void CL_StopRecord_f( void ) {
 		}
 
 		FS_Rename( tempName, finalName );
+		if ( discard ) {
+			FS_HomeRemove( finalName );
+		}
 	}
 
-	if ( !clc.demorecording ) {
-		Com_Printf( "Not recording a demo.\n" );
-	} else {
-		Com_Printf( "Stopped demo recording.\n" );
+	if ( !cl_demoQuiet ) {
+		if ( !clc.demorecording ) {
+			Com_Printf( "Not recording a demo.\n" );
+		} else {
+			Com_Printf( "Stopped demo recording.\n" );
+		}
 	}
 
 	clc.demorecording = qfalse;
 	clc.spDemoRecording = qfalse;
+	cl_pluginRecording = qfalse;
+}
+
+
+/*
+====================
+CL_SaveDemo_f
+
+savedemo <name>: writes the demo that is recorded so far to demos/<name> and goes on recording. For a demo that is made of
+segments (a game with checkpoints), where it is the way to the checkpoint that is current. The name goes through
+DemoRoute_CleanName, as the name a plugin gives: characters of a file name only, and "tas" in it.
+====================
+*/
+static qboolean CL_SaveDemoTo( const char *demoName ) {
+	char		name[MAX_OSPATH], tempName[MAX_OSPATH], finalName[MAX_OSPATH];
+	fileHandle_t f;
+	int			protocol, len = -1;
+
+	if ( !clc.demorecording || !clc.demoRoute ) {
+		Com_Printf( "No demo of a game with checkpoints is being recorded.\n" );
+		return qfalse;
+	}
+	Com_sprintf( name, sizeof( name ), "demos/%s", demoName );
+	protocol = ( clc.dm68compat || clc.demoplaying ) ? OLD_PROTOCOL_VERSION : NEW_PROTOCOL_VERSION;
+	if ( com_protocol->integer != DEFAULT_PROTOCOL_VERSION ) {
+		protocol = com_protocol->integer;
+	}
+	Com_sprintf( tempName, sizeof( tempName ), "%s.tmp", name );
+	Com_sprintf( finalName, sizeof( finalName ), "%s.%s%d", name, DEMOEXT, protocol );
+
+	f = FS_FOpenFileWrite( tempName );
+	if ( f == FS_INVALID_HANDLE ) {
+		Com_Printf( "ERROR: couldn't open.\n" );
+		return qfalse;
+	}
+	if ( DemoRoute_Export( f ) < 0 ) {
+		FS_FCloseFile( f );
+		FS_HomeRemove( tempName );
+		Com_Printf( S_COLOR_YELLOW "The demo could not be written.\n" );
+		return qfalse;
+	}
+	FS_Write( &len, 4, f );
+	FS_Write( &len, 4, f );
+	FS_FCloseFile( f );
+	FS_Rename( tempName, finalName );		// replaces a file that is there
+	if ( !cl_demoQuiet ) {
+		Com_Printf( "Demo written to %s.\n", finalName );
+	}
+	return qtrue;
+}
+
+static void CL_SaveDemo_f( void ) {
+	char clean[MAX_OSPATH];
+
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "savedemo <demoname>\n" );
+		return;
+	}
+	// the same rules as for a plugin: a name that stays in the demos folder, and "tas" in it (a route is a demo made with cheats)
+	if ( !DemoRoute_CleanName( Cmd_Argv( 1 ), clean, sizeof( clean ) ) ) {
+		Com_Printf( "The name cannot be used (letters, digits and _-.()[]+,# only, no .. and no leading . or /).\n" );
+		return;
+	}
+	if ( Q_stricmp( clean, Cmd_Argv( 1 ) ) ) {
+		Com_Printf( "Saving as %s\n", clean );
+	}
+	CL_SaveDemoTo( clean );
+}
+
+
+/*
+====================
+the demo calls of the plugin API (cap demo)
+
+A plugin records a demo of its own (demos/temp/plugin.dm_*) and saves what has been recorded under a name of its choosing. It can
+only touch that recording, not one the player started, and it can only write into the demos folder with a name made of safe
+characters. A demo of a game with cheats always has the word "tas" in its name, whatever the plugin asked for.
+====================
+*/
+
+qboolean CL_PluginDemoRecord( void ) {
+	if ( clc.demoplaying || clc.demorecording || cls.state != CA_ACTIVE ) {
+		return qfalse;
+	}
+	cl_demoQuiet = qtrue;
+	Cbuf_ExecuteText( EXEC_NOW, "record temp/plugin" );
+	cl_demoQuiet = qfalse;
+	cl_pluginRecording = clc.demorecording;
+	return clc.demorecording;
+}
+
+qboolean CL_PluginDemoStop( qboolean discard ) {
+	if ( !clc.demorecording || !cl_pluginRecording || clc.demoplaying ) {
+		return qfalse;
+	}
+	cl_demoQuiet = qtrue;
+	cl_demoDiscard = discard;
+	CL_StopRecord_f();
+	cl_demoQuiet = cl_demoDiscard = qfalse;
+	return qtrue;
+}
+
+qboolean CL_PluginDemoSave( const char *name ) {
+	char clean[MAX_OSPATH];
+	qboolean ok;
+
+	if ( !clc.demorecording || !cl_pluginRecording || !clc.demoRoute || clc.demoplaying || !DemoRoute_CleanName( name, clean, sizeof( clean ) ) ) {
+		return qfalse;
+	}
+	cl_demoQuiet = qtrue;
+	ok = CL_SaveDemoTo( clean );
+	cl_demoQuiet = qfalse;
+	return ok;
+}
+
+void CL_PluginDemoState( int *recording, int *segments, int *mine, int *bytes ) {
+	*recording = clc.demorecording && !clc.demoplaying ? 1 : 0;
+	*segments = *recording && clc.demoRoute ? 1 : 0;
+	*mine = *recording && cl_pluginRecording ? 1 : 0;
+	*bytes = *segments ? DemoRoute_Size() : 0;
 }
 
 
@@ -367,6 +515,13 @@ static void CL_WriteGamestate( qboolean initial )
 		MSG_WriteBigString( &msg, s );
 	}
 
+	// a demo of a game with cheats says so (cl_demoroute.h)
+	if ( clc.demoRoute && !cl.gameState.stringOffsets[ CS_ODF_DEMO ] ) {
+		MSG_WriteByte( &msg, svc_configstring );
+		MSG_WriteShort( &msg, CS_ODF_DEMO );
+		MSG_WriteBigString( &msg, CS_ODF_DEMO_VALUE );
+	}
+
 	// baselines
 	Com_Memset( &nullstate, 0, sizeof( nullstate ) );
 	for ( i = 0; i < MAX_GENTITIES ; i++ ) {
@@ -392,6 +547,11 @@ static void CL_WriteGamestate( qboolean initial )
 	MSG_WriteByte( &msg, svc_EOF );
 
 	// write it to the demo file
+	if ( clc.demoRoute ) {
+		DemoRoute_Header( clc.serverMessageSequence - 1, msg.data, msg.cursize, clc.serverCommandSequence );
+		return;
+	}
+
 	if ( clc.demoplaying )
 		len = LittleLong( clc.demoMessageSequence - 1 );
 	else
@@ -585,7 +745,7 @@ static void CL_Record_f( void ) {
 	}
 
 	// sync 0 doesn't prevent recording, so not forcing it off .. everyone does g_sync 1 ; record ; g_sync 0 ..
-	if ( NET_IsLocalAddress( &clc.serverAddress ) && !Cvar_VariableIntegerValue( "g_synchronousClients" ) ) {
+	if ( !cl_demoQuiet && NET_IsLocalAddress( &clc.serverAddress ) && !Cvar_VariableIntegerValue( "g_synchronousClients" ) ) {
 		Com_Printf (S_COLOR_YELLOW "WARNING: You should set 'g_synchronousClients 1' for smoother demo recording\n");
 	}
 
@@ -621,7 +781,9 @@ static void CL_Record_f( void ) {
 	// save desired filename without extension
 	Q_strncpyz( clc.recordName, name, sizeof( clc.recordName ) );
 
-	Com_Printf( "recording to %s.\n", name );
+	if ( !cl_demoQuiet ) {
+		Com_Printf( "recording to %s.\n", name );
+	}
 
 	// start new record with temporary extension
 	Q_strcat( name, sizeof( name ), ".tmp" );
@@ -638,7 +800,7 @@ static void CL_Record_f( void ) {
 
 	Com_TruncateLongString( clc.recordNameShort, clc.recordName );
 
-	if ( Cvar_VariableIntegerValue( "ui_recordSPDemo" ) ) {
+	if ( cl_demoQuiet || Cvar_VariableIntegerValue( "ui_recordSPDemo" ) ) {
 	  clc.spDemoRecording = qtrue;
 	} else {
 	  clc.spDemoRecording = qfalse;
@@ -650,10 +812,31 @@ static void CL_Record_f( void ) {
 	// we will rename record to dm_68 or dm_71 depending from this flag
 	clc.dm68compat = qtrue;
 
+	// in a local game with cheats a plugin may put the game back to a checkpoint: the messages are kept in segments then (cl_demoroute.h)
+	clc.demoRoute = !clc.demoplaying && SV_StateAvailable() && DemoRoute_Start();
+	Cvar_Set2( "cl_demoRoute", clc.demoRoute ? "1" : "0", qtrue );		// the cgame (autorecord) wants to know; read-only: only forced
+
 	// write out the gamestate message
 	CL_WriteGamestate( qtrue );
 
 	// the rest of the demo file will be copied from net messages
+}
+
+
+/*
+====================
+CL_DemoRouteRestart
+
+The game was put back to a snapshot the demo has no route to (it was made when nothing was recorded): the demo starts again here.
+====================
+*/
+void CL_DemoRouteRestart( void ) {
+	if ( !clc.demorecording || !clc.demoRoute ) {
+		return;
+	}
+	DemoRoute_Restart();
+	clc.demowaiting = qtrue;
+	CL_WriteGamestate( qtrue );
 }
 
 
@@ -1227,6 +1410,7 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	if ( clc.demorecording ) {
 		CL_StopRecord_f();
 	}
+	DemoRoute_Shutdown();
 
 	// Stop demo playback
 	if ( clc.demofile != FS_INVALID_HANDLE ) {
@@ -2885,6 +3069,7 @@ void CL_PacketEvent( const netadr_t *from, msg_t *msg ) {
 	clc.serverMessageSequence = LittleLong( *(int32_t *)msg->data );
 
 	clc.lastPacketTime = cls.realtime;
+	cl_preParseCmd = clc.serverCommandSequence;
 	CL_ParseServerMessage( msg );
 
 	//
@@ -3009,6 +3194,8 @@ void CL_Frame( int msec, int realMsec ) {
 	if ( !com_cl_running->integer ) {
 		return;
 	}
+
+	CL_Plugins_BeforeFrame();
 
 	// save the msec before checking pause
 	cls.realFrametime = realMsec;
@@ -3939,6 +4126,7 @@ void CL_Init( void ) {
 	Cvar_SetDescription( cl_activeAction, "Contents of this variable will be executed upon first frame of play.\nNote: It is cleared every time it is executed." );
 
 	cl_autoRecordDemo = Cvar_Get ("cl_autoRecordDemo", "0", CVAR_ARCHIVE);
+	Cvar_Get( "cl_demoRoute", "0", CVAR_ROM | CVAR_TEMP );	// 1 while the demo that is recorded is made of segments (cl_demoroute.h)
 	Cvar_SetDescription( cl_autoRecordDemo, "Auto-record demos when starting or joining a game." );
 	cl_drawRecording = Cvar_Get("cl_drawRecording", "1", CVAR_ARCHIVE);
 	Cvar_SetDescription( cl_drawRecording, "Hide (0) or shorten (1) \"RECORDING\" HUD message when recording demo." );
@@ -4116,6 +4304,8 @@ void CL_Init( void ) {
 	Cmd_SetCommandCompletionFunc( "demo", CL_CompleteDemoName );
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
+	Cmd_AddCommand ("savedemo", CL_SaveDemo_f);
+	sv_stateFreed = DemoRoute_Freed;
 	Cmd_AddCommand ("connect", CL_Connect_f);
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f);
 	Cmd_AddCommand ("localservers", CL_LocalServers_f);

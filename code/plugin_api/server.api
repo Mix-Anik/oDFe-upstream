@@ -1,0 +1,176 @@
+# oDFe server plugin API. The format is described at the top of client.api.
+#
+# A server plugin runs in a sandbox with no files, no network and no system calls. What it may use is decided by the server
+# operator, who lists the capabilities per plugin:  +set sv_plugins "records:auth,chat,storage,http=api.defrag.miks.dev"
+#   outstr(size)/outbuf(size) a buffer of size bytes the engine writes into
+#   inbuf(size)  a buffer of size bytes the engine reads (inbuf? may be NULL)
+#   i64          a 64 bit number (the plugin passes it as two 32 bit halves, low first: the VM has no 64 bit integers)
+
+module odfs
+version 1
+types odfs_types.h
+
+# "restricted" capabilities give a plugin power over other people's data; they are only given when the operator names them.
+cap chat        gets the "!command" chat messages of players (ChatCommandRegister)
+cap auth        restricted  answers the logins of players: gets the signatures (event auth_response) and tells the engine who is logged in
+cap ips         restricted  sees the IP addresses of players
+cap http        restricted  makes HTTP requests, only to the hosts the operator listed (http=host1|host2)
+cap storage     keeps files of its own in a private folder (8 MB, or what the operator gives: storage=64m)
+cap rawcmd      restricted  sends any server command to clients, not only print, cp and chat
+
+# ---------------------------------------------------------------------------
+# general
+# ---------------------------------------------------------------------------
+
+# Writes a line to the server console and log, prefixed with the plugin name.
+import Print( text: str )
+
+# Milliseconds since the engine started (wall clock, not game time).
+import Milliseconds() -> i32
+
+# The date and time: seconds since 1970-01-01 00:00 UTC, as an unsigned 32 bit number (good until 2106; the VM has no 64 bit
+# integers). Use it for timestamps, Milliseconds for measuring time.
+import UnixTime() -> i32
+
+# Fills buf with cryptographically secure random bytes. Returns 1 on success.
+import RandomBytes( buf: outbuf(len), len: i32 ) -> i32
+
+# Creates the cvar if it does not exist. An existing value (config file, command line) is kept. ODF_CVAR_PRIVATE makes it
+# readable by the plugin that created it only (not by other plugins, the game module or clients).
+# A plugin can read the cvars it created and some server settings (mapname, sv_hostname, sv_maxclients, sv_mapChecksum, g_*,
+# df_* and a few more), nothing else.
+import CvarRegister( name: str, defaultValue: str, flags: i32 )
+import CvarString( name: str, out: outstr(outSize), outSize: i32 )
+import CvarInteger( name: str ) -> i32
+
+include common.api
+
+# ---------------------------------------------------------------------------
+# clients
+# ---------------------------------------------------------------------------
+
+# Fills *out for the given slot. Returns 0 if the slot is free. The ip is empty unless the plugin has the capability ips.
+import GetClientInfo( clientNum: i32, out: out(odfClientInfo_t) ) -> i32
+
+# Queues a server command for a client, or for everybody when clientNum is -1: "print \"hello\n\"", "cp \"hello\"", "chat ...".
+# Other commands need the capability rawcmd.
+import SendServerCommand( clientNum: i32, command: str )
+
+# ---------------------------------------------------------------------------
+# events and chat commands
+# ---------------------------------------------------------------------------
+
+# An event the plugin subscribed to happened. data is a Quake info string: \key\value\key\value (at most 1023 characters, keys
+# and values never contain backslashes or quotes). The events are listed below.
+handler EventHandler( data: str )
+
+# Calls handler for every event with this name (lower case letters, digits and _) from now on. A plugin can subscribe to an
+# event more than once with different handlers; they run in the order of the subscriptions. Returns 0 when the name is invalid,
+# handler is NULL, the plugin has too many subscriptions or the event needs a capability the plugin does not have.
+import EventSubscribe( name: str, handler: fn(EventHandler) ) -> i32
+
+# A player typed a chat command. clientNum and serial are the slot and its connection counter (the same as in the events), args
+# is what follows the command, without the spaces around it ("vq3" for "!top vq3"), at most 200 characters.
+handler ChatCommandHandler( clientNum: i32, serial: i32, args: str )
+
+# Calls handler when a player says "!name" or "!name arguments" in the chat (name is lower case letters, digits and _, up to 31
+# long, compared without regard to case). The game still gets the message and shows it like any other. Not called for bots, nor
+# for messages with control characters, a backslash, a double quote or a semicolon. Several plugins (and one plugin more than
+# once) can have the same name. Returns 0 when the name is invalid, handler is NULL or the plugin has too many chat commands.
+import ChatCommandRegister( name: str, handler: fn(ChatCommandHandler) ) -> i32 cap chat
+
+# ---------------------------------------------------------------------------
+# login
+# ---------------------------------------------------------------------------
+
+# Answers an "auth_response" event. clientNum and serial are the values from the event; if the client has disconnected in the
+# meantime (serial no longer matches) the call is ignored. accountID and accountName are used for ODF_AUTHRES_OK. reason is a
+# short word without spaces ("bad_signature", "banned", ...) shown to the player for REJECTED, and may be NULL.
+import AuthResult( clientNum: i32, serial: i32, result: i32, accountID: i64, accountName: str?, reason: str? ) cap auth
+
+# ---------------------------------------------------------------------------
+# HTTP
+# ---------------------------------------------------------------------------
+
+# A request made with HttpRequest finished. id is the number HttpRequest returned and userData the value that was passed with
+# it. status is the HTTP status, or 0 if it failed before an answer (timeout, host not reachable, answer too large); bodyLen is
+# the size of the answer, read it with HttpBody while the handler runs.
+handler HttpHandler( id: i32, status: i32, bodyLen: i32, userData: i32 )
+
+# Starts a request and returns its id (1 or more), or 0 if it could not be started (host not allowed, too many requests,
+# handler is NULL, bad arguments). method is ODF_HTTP_GET or ODF_HTTP_POST. headers is "Name: value" lines separated by \n (only
+# Authorization, Content-Type and Accept are sent), may be NULL. When the request is done, handler( id, status, bodyLen,
+# userData ) is called in a later frame; userData is any number of the plugin's (an index into its own table, for example).
+# Nothing blocks.
+import HttpRequest( method: i32, url: str, headers: str?, body: inbuf?(bodyLen), bodyLen: i32, timeoutMs: i32, handler: fn(HttpHandler), userData: i32 ) -> i32 cap http
+
+# Copies a piece of the answer to out, from byte offset on, while the handler of the request runs. Returns the number of bytes copied.
+import HttpBody( id: i32, offset: i32, out: outbuf(outSize), outSize: i32 ) -> i32 cap http
+
+# ---------------------------------------------------------------------------
+# storage
+# ---------------------------------------------------------------------------
+
+# Files of the plugin's own folder. Names are letters, digits, . _ - (up to 63 long, not starting with a dot). The folder is
+# limited in size (4 MB a file and 8 MB all together; with storage=<size> in sv_plugins one file may use the whole size); there
+# are no paths.
+# StoreRead copies up to outSize bytes from byte offset on, returns the number copied or -1 (no such file).
+import StoreRead( name: str, offset: i32, out: outbuf(outSize), outSize: i32 ) -> i32 cap storage
+
+# Replaces the file (append 0) or adds to its end (append 1). Returns 1 on success, 0 if it did not fit or failed.
+import StoreWrite( name: str, data: inbuf?(len), len: i32, append: i32 ) -> i32 cap storage
+
+# The size of the file, or -1 if there is none.
+import StoreSize( name: str ) -> i32 cap storage
+
+# Returns 1 if the file existed and is gone now.
+import StoreDelete( name: str ) -> i32 cap storage
+
+# ---------------------------------------------------------------------------
+# what the plugin offers the engine
+# ---------------------------------------------------------------------------
+
+# Called once after loading. Return 0 on success; anything else unloads the plugin (OnShutdown is not called then).
+export OnInit() -> i32 budget init
+
+# Called once when the server shuts down. Pending work should be saved here.
+export OnShutdown() budget init
+
+# Called every server frame. serverTime is the server's time (as for the game).
+export OnFrame( serverTime: i32 )
+
+# ---------------------------------------------------------------------------
+# events (see EventSubscribe). Values are decimal integers unless noted.
+# ---------------------------------------------------------------------------
+
+# "player_finish"      raised by the game module (trap_Event) when a player finishes a timed run.
+#      client          client slot
+#      time            run time in ms
+#      est             sub-millisecond corrected estimate, in ms
+#      promode         physics: 0 VQ3, 1 CPM
+#      mode            1 run, 2 tricks, 3 fastcaps
+#      submode         raw sub-mode value, -1 in run mode
+#      interference_off  df_mp_InterferenceOff: bit 0 no player-player collision, bit 1 no player-player damage; 0 = off
+#      killobs         df_ob_killobs, 0 = obstacles are not killed
+#      version         game module version number
+#   The game module is trusted to send what it wants; any other event name it sends is passed to the plugins as it is.
+#   The account of the player is not part of it: look at GetClientInfo( client ).
+event player_finish
+
+# "auth_response"      a client answered a login challenge. Only plugins with the capability auth get it.
+#      client, serial  the slot and its connection counter; hand both to AuthResult
+#      nonce           64 hex characters, the challenge the engine sent
+#      pubkey          64 hex characters, the client's Ed25519 public key
+#      sig             128 hex characters, the signature
+#      addr            the server address the client signed, "ip:port"
+#      ip              the client's address (only with the capability ips)
+event auth_response cap auth
+
+# "client_disconnect"  a player left.
+#      client, serial
+event client_disconnect
+
+# "map_begin"          a map was loaded.
+#      map             map name
+#      checksum        map checksum (sv_mapChecksum)
+event map_begin

@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_scrn.c -- master for refresh, status bar, console, chat, notify, etc
 
 #include "client.h"
+#include "cl_demoroute.h"
 
 static qboolean	scr_initialized;		// ready to draw
 
@@ -373,7 +374,7 @@ static void SCR_DrawDemoRecording( void ) {
 		return;
 	}
 
-	pos = FS_FTell( clc.recordfile );
+	pos = clc.demoRoute ? DemoRoute_Size() : FS_FTell( clc.recordfile );
 
 	if (cl_drawRecording->integer == 1) {
 		sprintf(string, "RECORDING %s: %ik", clc.recordNameShort, pos / 1024);
