@@ -312,6 +312,7 @@
     <ClCompile Include="..\..\server\sv_main.c" />
     <ClCompile Include="..\..\server\sv_net_chan.c" />
     <ClCompile Include="..\..\server\sv_plugin.c" />
+    <ClCompile Include="..\..\server\sv_state.c" />
     <ClCompile Include="..\..\server\sv_http.c" />
     <ClCompile Include="..\..\server\sv_snapshot.c" />
     <ClCompile Include="..\..\server\sv_world.c" />

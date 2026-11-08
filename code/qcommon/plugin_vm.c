@@ -568,7 +568,7 @@ pluginVM_t *PluginVM_Load( void *image, int size, const pluginVMConfig_t *cfg, v
 {
 	vmHeader_t		*header = (vmHeader_t *)image;
 	pluginVM_t		*p = NULL;
-	const char		*errMsg;
+	const char		*errMsg = NULL;
 	unsigned		exactDataLength, dataLength, dataAlloc, extra;
 	int32_t			*targets = NULL;
 	int				result = 0, i;
