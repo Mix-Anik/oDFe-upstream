@@ -79,9 +79,10 @@ float Atan2( float y, float x );
 
 float Sqrt( float x );
 
-// Fills size bytes at dst with the byte value. Copies size bytes from src to dst (they must not overlap).
+// Fills size bytes at dst with the byte value.
 void MemSet( void *dst, int value, int size );
 
+// Copies size bytes from src to dst (they must not overlap).
 void MemCpy( void *dst, const void *src, int size );
 
 // Fills *out for the given slot. Returns 0 if the slot is free. The ip is empty unless the plugin has the capability ips.

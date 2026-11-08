@@ -66,9 +66,10 @@ float Atan2( float y, float x );
 
 float Sqrt( float x );
 
-// Fills size bytes at dst with the byte value. Copies size bytes from src to dst (they must not overlap).
+// Fills size bytes at dst with the byte value.
 void MemSet( void *dst, int value, int size );
 
+// Copies size bytes from src to dst (they must not overlap).
 void MemCpy( void *dst, const void *src, int size );
 
 // Fills *out with the snapshot the game is currently showing (the newest one that is not ahead of the view time). Returns 0
