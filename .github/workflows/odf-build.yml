@@ -89,7 +89,7 @@ jobs:
             id: linux-arm64
             ldflags: -static
           - name: macOS arm64
-            runner: macos-14
+            runner: macos-15
             id: macos-arm64
             ldflags: ''
 
