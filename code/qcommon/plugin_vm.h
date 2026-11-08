@@ -79,6 +79,8 @@ typedef struct {
 	unsigned	importCalls;		// engine functions called by those calls
 	int64_t		micros;				// total time
 	int			maxMicros;			// the slowest call
+	int			maxSteps;			// the most steps a call used (of its budget)
+	int			maxWork;			// the most units of engine work a call used (of its allowance, see PLUGIN_VM_WORK_FRAME)
 } pluginVMStats_t;
 void		PluginVM_GetStats( const pluginVM_t *vm, int exportIndex, pluginVMStats_t *out );
 void		PluginVM_ResetStats( pluginVM_t *vm );

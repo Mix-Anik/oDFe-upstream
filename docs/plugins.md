@@ -22,7 +22,7 @@ The VM code is `code/qcommon/plugin_vm.c` with small additions in `vm_x86.c` and
 * Put the program in `<home path>/plugins/` as `<name>.qvm`. Plugins are loaded from there only, never from downloaded paks.
 * Load it with the startup-only cvar `sv_plugins`, a space separated list of `name` or `name:grants`: `+set sv_plugins "records:auth,chat,storage,http=api.example.com"`. It must be set on the command line or in a config that is executed before the server starts (`autoexec.cfg`), not changed later from the console. `http=` lists the hosts (separated by `|`) the plugin may make requests to. `storage=<size>` sets how much disk the plugin's store (`plugin-data/<name>/` in the home path) may use, a number with `k`, `m` or `g` from 1k to 1g (`storage=64m`); a single `storage` gives 8 MB in all and 4 MB a file, with a size one file may use all of it.
 * A plugin names the capabilities it needs in its manifest (`caps=`); it is not loaded when the operator did not give them, and the console says which line to use if the operator trusts it.
-* `plugins` lists what was loaded and why something is not running; `plugins stats` shows how much time each plugin used.
+* `plugins` lists what was loaded and why something is not running; `plugins stats` shows how much time each plugin used, and the most steps and engine work one call used (of the budget and of the allowance), to see how close a plugin gets to being stopped.
 * Everything runs on the server's main thread, so handlers and `OnFrame` must not block. HTTP requests are made by the engine (libcurl); the handler the plugin gave `HttpRequest` is called with the answer in a later frame.
 
 ### Events

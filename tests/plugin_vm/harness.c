@@ -335,6 +335,19 @@ static void RunSuite( const char *label )
 		Call2( vm, 0, 1, 2, PLUGIN_VM_BUDGET_FRAME, &r );
 		PluginVM_GetStats( vm, 0, &st );
 		CHECK( st.calls == 2 && st.importCalls == 2, "stats: %u calls, %u imports", st.calls, st.importCalls );
+		CHECK( st.maxSteps > 0 && st.maxSteps < 1000 && st.maxWork == 0, "stats: %d steps, %d work for a small call", st.maxSteps, st.maxWork );
+		PluginVM_Free( vm );
+	}
+	// the peak of steps and of engine work (40 calls of 100000 units each)
+	vm = Load( CAP_RESTRICTED | CAP_OTHER );
+	if ( vm ) {
+		pluginVMStats_t st;
+
+		CHECK( Call2( vm, 19, 40, 0, PLUGIN_VM_BUDGET_FRAME, &r ) && r == 40, "slow calls" );
+		Call2( vm, 19, 10, 0, PLUGIN_VM_BUDGET_FRAME, &r );
+		PluginVM_GetStats( vm, 19, &st );
+		CHECK( st.calls == 2 && st.maxWork == 4000000, "stats: %u calls, peak of work %d, wanted 4000000", st.calls, st.maxWork );
+		CHECK( st.maxSteps > 0 && st.maxSteps < 1000, "stats: peak of steps %d", st.maxSteps );
 		PluginVM_Free( vm );
 	}
 	ok = qtrue;

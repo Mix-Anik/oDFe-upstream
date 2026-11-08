@@ -44,6 +44,8 @@ struct pluginVM_s {
 	volatile qboolean	failed;
 	jmp_buf				*jmp;				// where a stopped plugin goes back to: the innermost call
 	int64_t				work;				// what is left of the allowance of engine work of the call that is running (PluginVM_Charge)
+	int64_t				lastSteps;			// what the last CallEntry used, for the stats
+	int64_t				lastWork;
 	pluginVMStats_t		stats[PLUGIN_VM_MAX_EXPORTS];
 };
 
@@ -316,6 +318,8 @@ static qboolean CallEntry( pluginVM_t *p, int command, int budget, int *result )
 		ok = qfalse;
 		p->vm.programStack = stackOnEntry;
 	}
+	p->lastWork = work - p->work;
+	p->lastSteps = ok ? budget - *Meter( p ) : budget;
 	*Meter( p ) = savedMeter;
 	p->work = prevWork;
 	pluginActive = prevActive;
@@ -361,6 +365,12 @@ qboolean PluginVM_Call( pluginVM_t *p, int exportIndex, const int *args, int num
 		if ( took > st->maxMicros ) {
 			st->maxMicros = took;
 		}
+		if ( p->lastSteps > st->maxSteps ) {
+			st->maxSteps = (int)p->lastSteps;
+		}
+		if ( p->lastWork > st->maxWork ) {
+			st->maxWork = (int)p->lastWork;
+		}
 	}
 	if ( ok && result ) {
 		*result = r;
@@ -395,11 +405,11 @@ void PluginVM_PrintStats( const pluginVM_t *p, const char *const *exportNames, i
 			continue;
 		}
 		if ( !any ) {
-			Com_Printf( "  %-16s %9s %9s %9s %12s\n", "export", "calls", "avg us", "max us", "imports/call" );
+			Com_Printf( "  %-16s %9s %9s %9s %12s %10s %10s\n", "export", "calls", "avg us", "max us", "imports/call", "max steps", "max work" );
 			any = 1;
 		}
-		Com_Printf( "  %-16s %9u %9.1f %9i %12.1f\n", exportNames[i], st->calls, (double)st->micros / st->calls, st->maxMicros,
-			(double)st->importCalls / st->calls );
+		Com_Printf( "  %-16s %9u %9.1f %9i %12.1f %10i %10i\n", exportNames[i], st->calls, (double)st->micros / st->calls, st->maxMicros,
+			(double)st->importCalls / st->calls, st->maxSteps, st->maxWork );
 	}
 	if ( !any ) {
 		Com_Printf( "  no calls yet\n" );
