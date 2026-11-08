@@ -540,11 +540,33 @@ static int Imp_ChatCommandRegister( const char *name, int handler )
 
 // ---- the store ----
 
+// Windows opens a device, not a file, for these names with or without an extension (CON, nul.txt, COM1.dat ...). Refused on every
+// system, so a plugin that works on a Linux server does not break when it is run on Windows
+static qboolean IsDeviceName( const char *name )
+{
+	static const char *const devices[] = { "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$" };
+	char stem[16];
+	int i, n = 0;
+
+	while ( name[n] && name[n] != '.' && n < (int)sizeof( stem ) - 1 ) {
+		stem[n] = name[n];
+		n++;
+	}
+	stem[n] = '\0';
+	for ( i = 0; i < (int)ARRAY_LEN( devices ); i++ ) {
+		if ( !Q_stricmp( stem, devices[i] ) ) {
+			return qtrue;
+		}
+	}
+	return n == 4 && ( !Q_stricmpn( stem, "COM", 3 ) || !Q_stricmpn( stem, "LPT", 3 ) ) && stem[3] >= '0' && stem[3] <= '9';
+}
+
 static qboolean ValidStoreName( const char *name )
 {
 	int i, len = (int)strlen( name );
 
-	if ( len < 1 || len > STORE_MAX_NAME || name[0] == '.' ) {
+	// a name that ends in a dot is the same file as the one without it on Windows
+	if ( len < 1 || len > STORE_MAX_NAME || name[0] == '.' || name[len - 1] == '.' || IsDeviceName( name ) ) {
 		return qfalse;
 	}
 	for ( i = 0; i < len; i++ ) {

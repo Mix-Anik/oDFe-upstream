@@ -635,7 +635,10 @@ int main( int argc, char **argv )
 	CHECK( Act( mock, "mock", "stored", "a.txt", "", 0 ) == 0, "delete of a file that is gone" );
 
 	{
-		static const char *const bad[] = { "../evil", "..", "a/b", "a\\b", ".hidden", "c:evil", "", "/etc/passwd", "con:" };
+		static const char *const bad[] = { "../evil", "..", "a/b", "a\\b", ".hidden", "c:evil", "", "/etc/passwd", "con:",
+			"CON", "nul", "Aux.txt", "prn.tar.gz", "COM1", "com9.dat", "lpt1", "LPT3.txt", "dot.", "name..." };
+		// names that only look like devices
+		static const char *const good[] = { "console.txt", "com10", "com0x.txt", "lpt", "nulls", "aux_1", "a.b" };
 
 		for ( i = 0; i < (int)( sizeof( bad ) / sizeof( bad[0] ) ); i++ ) {
 			// a backslash cannot be in the test event itself, it would end the value: that one is covered by the others
@@ -645,6 +648,10 @@ int main( int argc, char **argv )
 			CHECK( Act( mock, "mock", "storew", bad[i], "x", 0 ) == 0, "the file name '%s' was accepted", bad[i] );
 		}
 		CHECK( !FileExists( home, "plugin-data/evil" ) && !FileExists( home, "evil" ) && !FileExists( home, "plugin-data/mock/.hidden" ), "a file ended up where it should not" );
+		for ( i = 0; i < (int)( sizeof( good ) / sizeof( good[0] ) ); i++ ) {
+			CHECK( Act( mock, "mock", "storew", good[i], "x", 0 ) == 1, "the file name '%s' was refused", good[i] );
+			Act( mock, "mock", "stored", good[i], "", 0 );
+		}
 	}
 
 	// every plugin has its own folder

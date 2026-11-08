@@ -4,7 +4,7 @@
 set -e
 cd "$(dirname "$0")"
 OUT=${OUT:-build}
-Q3TOOLS=${Q3TOOLS:-/d/Other/Programming/C/oDFs/bin}
+. ../q3tools.sh
 mkdir -p "$OUT"
 Q=../../code/qcommon
 

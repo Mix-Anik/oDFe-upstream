@@ -98,7 +98,7 @@ The server messages are handled by the engine and never reach the cgame.
 
 ## Tests
 
-Native tests, no game needed (MSYS2 MinGW64 or any gcc; the ones with QVM programs need q3lcc and q3asm, `Q3TOOLS` is the folder they are in):
+Native tests, no game needed (MSYS2 MinGW64 or any gcc; the ones with QVM programs need q3lcc and q3asm, `Q3TOOLS` is the folder they are in, by default the `bin` folder of an `oDFs` checkout next to this repository; the `tests` workflow runs all of them on pull requests):
 
 ```
 sh tests/auth_proto/run.sh      # hex, signed message, Ed25519; prints an interop vector checked by the Go API

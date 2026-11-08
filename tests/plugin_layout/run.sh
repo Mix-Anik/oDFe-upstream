@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 OUT=${OUT:-build}
-Q3TOOLS=${Q3TOOLS:-/d/Other/Programming/C/oDFs/bin}
+. ../q3tools.sh
 PYTHON=${PYTHON:-python}
 API=../../code/plugin_api
 mkdir -p "$OUT"

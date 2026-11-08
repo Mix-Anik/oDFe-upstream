@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 OUT=${OUT:-build}
 HOME_DIR="$OUT/home"
 PLUGINS="$HOME_DIR/plugins"
-Q3TOOLS=${Q3TOOLS:-/d/Other/Programming/C/oDFs/bin}
+. ../q3tools.sh
 mkdir -p "$PLUGINS"
 rm -rf "$PLUGINS"/*.qvm "$HOME_DIR/plugin-data"
 
