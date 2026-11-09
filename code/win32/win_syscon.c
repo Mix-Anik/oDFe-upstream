@@ -24,6 +24,22 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "win_local.h"
 #include "resource.h"
 
+#ifdef DEDICATED
+// A frame run by a timer of the console window (the window is being dragged or text is selected) can pump messages itself, which
+// brings the next timer message: without the guard the frames nest until the stack is gone.
+static void Con_TimerFrame( void )
+{
+	static qboolean busy;
+
+	if ( busy ) {
+		return;
+	}
+	busy = qtrue;
+	Com_Frame( qfalse );
+	busy = qfalse;
+}
+#endif
+
 #define COPY_ID			1
 #define QUIT_ID			2
 #define CLEAR_ID		3
@@ -354,7 +370,7 @@ static LRESULT WINAPI ConWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 		else if ( wParam == CON_TIMER_ID && conTimerID != 0 && !com_errorEntered )
 		{
 #ifdef DEDICATED
-			Com_Frame( qfalse );
+			Con_TimerFrame();
 #else
 			//Com_Frame( CL_NoDelay() );
 #endif
@@ -445,7 +461,7 @@ static LRESULT WINAPI BufferWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
 		if ( wParam == BUF_TIMER_ID && bufTimerID != 0 && !com_errorEntered )
 		{
 #ifdef DEDICATED
-			Com_Frame( qfalse );
+			Con_TimerFrame();
 #else
 			//Com_Frame( CL_NoDelay() );
 #endif

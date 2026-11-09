@@ -726,6 +726,14 @@ void SV_DirectConnect( const netadr_t *from ) {
 		}
 	}
 
+#ifdef RELAY
+	// the local player has the slot the remote server gave the relay
+	i = RL_LocalSlot();
+	if ( i >= 0 && i < sv.maxclients && svs.clients[i].state == CS_FREE ) {
+		newcl = &svs.clients[i];
+	}
+#endif
+
 	if ( !newcl ) {
 		if ( NET_IsLocalAddress( from ) ) {
 			count = 0;
@@ -2062,6 +2070,11 @@ qboolean SV_ExecuteClientCommand( client_t *cl, const char *s ) {
 				continue; // bypass this command to the gamecode
 			}
 			ucmd->func( cl );
+#ifdef RELAY
+			if ( ucmd->func == SV_UpdateUserinfo_f ) {
+				RL_UserinfoChanged( cl - svs.clients, cl->userinfo );
+			}
+#endif
 			bFloodProtect = qfalse;
 			break;
 		}
@@ -2082,6 +2095,12 @@ qboolean SV_ExecuteClientCommand( client_t *cl, const char *s ) {
 	} else {
 		// pass unknown strings to the game
 		if ( !ucmd->name && sv.state == SS_GAME && cl->state >= CS_PRIMED ) {
+#ifdef RELAY
+			// the relay answers its own commands and hands the rest to the remote server
+			if ( RL_ClientCommand( cl - svs.clients, s ) ) {
+				return qtrue;
+			}
+#endif
 			// server plugins may answer chat commands ("!top")
 			SV_Plugin_ChatCommand( cl );
 			if ( gvm->forceDataMask )
@@ -2149,6 +2168,12 @@ void SV_ClientThink (client_t *cl, usercmd_t *cmd) {
 	if ( cl->state != CS_ACTIVE ) {
 		return;		// may have been kicked during the last usercmd
 	}
+
+#ifdef RELAY
+	if ( !RL_ClientThink( cl - svs.clients, cmd ) ) {
+		return;
+	}
+#endif
 
 	VM_Call( gvm, 1, GAME_CLIENT_THINK, cl - svs.clients );
 }

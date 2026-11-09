@@ -251,9 +251,11 @@ static client_t *State_Client( qboolean print )
 	if ( gvm->entryPoint || !gvm->dataBase ) {
 		REFUSE( "the game module is not a QVM (vm_game 0 is not supported)" );
 	}
+#ifndef RELAY
 	if ( !Cvar_VariableIntegerValue( "sv_cheats" ) ) {
 		REFUSE( "cheats are not enabled" );
 	}
+#endif
 	if ( gvm->callLevel ) {
 		REFUSE( "the game module is running" );
 	}
@@ -263,7 +265,12 @@ static client_t *State_Client( qboolean print )
 		if ( cl->state == CS_FREE ) {
 			continue;
 		}
+#ifdef RELAY
+		// the relay rewinds the game of its one local player; he is on the local machine but not on the loopback channel
+		if ( found || cl->state != CS_ACTIVE || cl->netchan.remoteAddress.type == NA_BOT ) {
+#else
 		if ( found || cl->state != CS_ACTIVE || cl->netchan.remoteAddress.type != NA_LOOPBACK ) {
+#endif
 			REFUSE( "only for a local game without other players" );
 		}
 		found = cl;
@@ -444,6 +451,49 @@ qboolean SV_StateCanApply( int handle )
 	return st && State_Client( qfalse ) && Baseline_Fits() && st->numEntities <= MAX_GENTITIES;
 }
 
+// The game module's memory, how its entities are linked into the world and the doors, and the time. Nothing is linked again:
+// that would work out the boxes of the entities anew, and some (bodies) are not where they were linked.
+static void State_PutRegions( const state_t *st )
+{
+	int i;
+
+	for ( i = 0; i < NUM_REGIONS; i++ ) {
+		byte *now = Z_Malloc( baseline.size[i] + 1 );
+
+		if ( Diff_Apply( st->diff[i].data, st->diff[i].size, baseline.data[i], now, baseline.size[i] ) ) {
+			Z_Free( now );
+			Com_Error( ERR_DROP, "%s: corrupt state", __func__ );
+		}
+		Region_Put( i, now );
+		Z_Free( now );
+	}
+
+	sv.time = st->time;
+	sv.timeResidual = st->timeResidual;
+	sv.num_entities = st->numEntities;
+}
+
+#ifdef RELAY
+// Puts the game back as it was, for the relay: it runs the frames again at once, so the client and the configstrings (which the
+// relay owns) are left alone and nobody is told.
+qboolean SV_StateRewind( int handle )
+{
+	state_t *st = State_Find( handle );
+	client_t *cl;
+
+	if ( !st || !SV_StateCanApply( handle ) ) {
+		return qfalse;
+	}
+	cl = &svs.clients[st->clientNum];
+	if ( cl != State_Client( qtrue ) ) {
+		return qfalse;
+	}
+	State_PutRegions( st );
+	cl->lastUsercmd = st->lastUsercmd;
+	return qtrue;
+}
+#endif
+
 // Puts the game back as it was. The client has to be told (CL_Plugins_StateResync).
 qboolean SV_StateApply( int handle )
 {
@@ -459,22 +509,7 @@ qboolean SV_StateApply( int handle )
 		return qfalse;
 	}
 
-	// The game module's memory, how its entities are linked into the world and the doors. Nothing is linked again: that would
-	// work out the boxes of the entities anew, and some (bodies) are not where they were linked.
-	for ( i = 0; i < NUM_REGIONS; i++ ) {
-		byte *now = Z_Malloc( baseline.size[i] + 1 );
-
-		if ( Diff_Apply( st->diff[i].data, st->diff[i].size, baseline.data[i], now, baseline.size[i] ) ) {
-			Z_Free( now );
-			Com_Error( ERR_DROP, "%s: corrupt state", __func__ );
-		}
-		Region_Put( i, now );
-		Z_Free( now );
-	}
-
-	sv.time = st->time;
-	sv.timeResidual = st->timeResidual;
-	sv.num_entities = st->numEntities;
+	State_PutRegions( st );
 
 	// configstrings: back to the baseline, then what the state changed
 	{

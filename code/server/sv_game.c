@@ -83,6 +83,11 @@ Sends a command string to a client
 ===============
 */
 static void SV_GameSendServerCommand( int clientNum, const char *text ) {
+#ifdef RELAY
+	if ( RL_DropGameCommand( clientNum, text ) ) {
+		return;
+	}
+#endif
 	if ( clientNum == -1 ) {
 		SV_SendServerCommand( NULL, "%s", text );
 	} else {

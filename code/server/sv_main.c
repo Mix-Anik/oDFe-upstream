@@ -1214,6 +1214,12 @@ void SV_PacketEvent( const netadr_t *from, msg_t *msg ) {
 	client_t	*cl;
 	int			qport;
 
+#ifdef RELAY
+	if ( RL_PacketEvent( from, msg ) ) {
+		return;
+	}
+#endif
+
 	if ( msg->cursize < 6 ) // too short for anything
 		return;
 
@@ -1628,7 +1634,13 @@ void SV_Frame( int msec ) {
 		sv.time += frameMsec;
 
 		// let everything in the world think and move
+#ifdef RELAY
+		RL_FrameStart();
+#endif
 		VM_Call( gvm, 1, GAME_RUN_FRAME, sv.time );
+#ifdef RELAY
+		RL_FrameDone();
+#endif
 	}
 
 	if ( com_speeds->integer ) {

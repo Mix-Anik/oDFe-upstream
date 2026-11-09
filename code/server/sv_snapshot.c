@@ -676,6 +676,11 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	for ( i = 0 ; i < entityNumbers.numSnapshotEntities ; i++ )	{
 		frame->ents[ i ] = svs.currFrame->ents[ entityNumbers.snapshotEntities[ i ] ];
 	}
+
+#ifdef RELAY
+	// the other players of the remote server
+	RL_AddSnapshotEntities( client, frame );
+#endif
 }
 
 

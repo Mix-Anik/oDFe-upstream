@@ -1373,4 +1373,22 @@ int HuffmanGetSymbol( unsigned int* symbol, const byte* buffer, int bitIndex );
 // functional gate syscall number
 #define COM_TRAP_GETVALUE 700
 
+#ifdef RELAY
+// the relay server (relay/), only in the relay build
+void		RL_Init( void );
+void		RL_Frame( int msec );
+void		RL_Shutdown( void );
+qboolean	RL_PacketEvent( const netadr_t *from, msg_t *msg );
+int			RL_LocalSlot( void );
+int			RL_SpawnTime( void );
+void		RL_SpawnSlots( void );
+void		RL_FrameStart( void );
+void		RL_FrameDone( void );
+qboolean	RL_ClientThink( int clientNum, const usercmd_t *cmd );	// qfalse: the game must not run this usercmd
+qboolean	RL_ClientCommand( int clientNum, const char *s );
+void		RL_UserinfoChanged( int clientNum, const char *userinfo );
+qboolean	RL_DropGameCommand( int clientNum, const char *text );
+qboolean	RL_ConfigstringBlocked( int index );
+#endif
+
 #endif // _QCOMMON_H_

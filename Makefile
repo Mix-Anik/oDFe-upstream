@@ -32,6 +32,7 @@ endif
 
 BUILD_CLIENT     = 1
 BUILD_SERVER     = 1
+BUILD_RELAY      = 0
 
 USE_SDL          = 1
 USE_CURL         = 1
@@ -55,6 +56,7 @@ RENDERER_DEFAULT = opengl
 
 CNAME            = oDFe
 DNAME            = oDFe.ded
+RNAME            = oDFe.relay
 
 RENDERER_PREFIX  = $(CNAME)
 
@@ -225,6 +227,7 @@ CMDIR=$(MOUNT_DIR)/qcommon
 UDIR=$(MOUNT_DIR)/unix
 W32DIR=$(MOUNT_DIR)/win32
 BLIBDIR=$(MOUNT_DIR)/botlib
+RLDIR=relay
 JPDIR=$(MOUNT_DIR)/libjpeg
 OGGDIR=$(MOUNT_DIR)/libogg
 VORBISDIR=$(MOUNT_DIR)/libvorbis
@@ -682,6 +685,7 @@ TARGET_REND2 = $(RENDERER_PREFIX)_opengl2_$(SHLIBNAME)
 TARGET_RENDV = $(RENDERER_PREFIX)_vulkan_$(SHLIBNAME)
 
 TARGET_SERVER = $(DNAME)$(ARCHEXT)$(BINEXT)
+TARGET_RELAY = $(RNAME)$(ARCHEXT)$(BINEXT)
 
 STRINGIFY = $(B)/rend2/stringify$(BINEXT)
 
@@ -689,6 +693,10 @@ TARGETS =
 
 ifneq ($(BUILD_SERVER),0)
   TARGETS += $(B)/$(TARGET_SERVER)
+endif
+
+ifneq ($(BUILD_RELAY),0)
+  TARGETS += $(B)/$(TARGET_RELAY)
 endif
 
 ifneq ($(BUILD_CLIENT),0)
@@ -852,6 +860,9 @@ endif
 ifneq ($(BUILD_SERVER),0)
 	@if [ ! -d $(B)/ded ];then $(MKDIR) $(B)/ded/qvm;fi
 	@if [ ! -d $(B)/ded/qvm ];then $(MKDIR) $(B)/ded/qvm;fi
+endif
+ifneq ($(BUILD_RELAY),0)
+	@if [ ! -d $(B)/rded/qvm ];then $(MKDIR) $(B)/rded/qvm;fi
 endif
 
 #############################################################################
@@ -1474,6 +1485,16 @@ $(B)/$(TARGET_SERVER): $(Q3DOBJ)
 	$(Q)$(CC) -o $@ $(Q3DOBJ) $(LDFLAGS) $(SERVER_LDFLAGS)
 
 #############################################################################
+# RELAY SERVER: the dedicated server built with -DRELAY plus relay/
+#############################################################################
+
+Q3ROBJ = $(subst $(B)/ded/,$(B)/rded/,$(Q3DOBJ))   $(B)/rded/rl_download.o $(B)/rded/rl_main.o $(B)/rded/rl_mirror.o $(B)/rded/rl_overlay.o $(B)/rded/rl_reconcile.o $(B)/rded/rl_remote.o
+
+$(B)/$(TARGET_RELAY): $(Q3ROBJ)
+	$(echo_cmd) "LD $@"
+	$(Q)$(CC) -o $@ $(Q3ROBJ) $(LDFLAGS) $(SERVER_LDFLAGS)
+
+#############################################################################
 ## CLIENT/SERVER RULES
 #############################################################################
 
@@ -1572,6 +1593,40 @@ $(B)/ded/%.o: $(W32DIR)/%.c
 
 $(B)/ded/%.o: $(W32DIR)/%.rc
 	$(DO_WINDRES)
+
+define DO_RELAY_CC
+$(echo_cmd) "RELAY_CC $<"
+$(Q)$(CC) $(CFLAGS) -DDEDICATED -DRELAY -o $@ -c $<
+endef
+
+define DO_RELAY_CC_QVM
+$(echo_cmd) "RELAY_CC_QVM $<"
+$(Q)$(CC) $(CFLAGS) -fno-fast-math -DDEDICATED -DRELAY -o $@ -c $<
+endef
+
+$(B)/rded/%.o: $(ADIR)/%.s
+	$(DO_AS)
+
+$(B)/rded/%.o: $(RLDIR)/%.c
+	$(DO_RELAY_CC)
+
+$(B)/rded/%.o: $(SDIR)/%.c
+	$(DO_RELAY_CC)
+
+$(B)/rded/%.o: $(CMDIR)/%.c
+	$(DO_RELAY_CC)
+
+$(B)/rded/qvm/%.o: $(CMDIR)/%.c
+	$(DO_RELAY_CC_QVM)
+
+$(B)/rded/%.o: $(BLIBDIR)/%.c
+	$(DO_BOT_CC)
+
+$(B)/rded/%.o: $(UDIR)/%.c
+	$(DO_RELAY_CC)
+
+$(B)/rded/%.o: $(W32DIR)/%.c
+	$(DO_RELAY_CC)
 
 #############################################################################
 # MISC

@@ -116,6 +116,12 @@ void SV_SetConfigstring (int index, const char *val) {
 		val = "";
 	}
 
+#ifdef RELAY
+	if ( RL_ConfigstringBlocked( index ) ) {
+		return;
+	}
+#endif
+
 	// don't bother broadcasting an update if no change
 	if ( !strcmp( val, sv.configstrings[ index ] ) ) {
 		return;
@@ -461,6 +467,11 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	FS_PureServerSetReferencedPaks( "", "" );
 #endif
 
+#ifdef RELAY
+	// the local player takes the slot the remote server gave the relay (the game starts anew and takes every client from scratch)
+	RL_SpawnSlots();
+#endif
+
 	// clear pak references
 	FS_ClearPakReferences( 0 );
 
@@ -548,6 +559,14 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 
 	// make sure that level time is not zero
 	//sv.time = sv.time ? sv.time : 8;
+
+#ifdef RELAY
+	// the time of the local server follows the one of the remote server
+	i = RL_SpawnTime();
+	if ( i > 0 ) {
+		sv.time = i;
+	}
+#endif
 
 	// load and spawn all other entities
 	SV_InitGameProgs();

@@ -344,6 +344,10 @@ void NORETURN FORMAT_PRINTF(2, 3) QDECL Com_Error( errorParm_t code, const char 
 		}
 	}
 
+#ifdef RELAY
+	// whatever goes wrong here, the remote server is told that the relay leaves it
+	RL_Shutdown();
+#endif
 	Cbuf_Init();
 
 	if ( code == ERR_DISCONNECT || code == ERR_SERVERDISCONNECT ) {
@@ -428,6 +432,9 @@ void Com_Quit_f( void ) {
 		// which would trigger an unload of active VM error.
 		// Sys_Quit will kill this process anyways, so
 		// a corrupt call stack makes no difference
+#ifdef RELAY
+		RL_Shutdown();
+#endif
 		VM_Forced_Unload_Start();
 		SV_Shutdown( p[0] ? p : "Server quit" );
 		SV_Plugins_Shutdown();
@@ -3994,6 +4001,9 @@ void Com_Init( char *commandLine ) {
 
 	VM_Init();
 	SV_Init();
+#ifdef RELAY
+	RL_Init();
+#endif
 
 	com_dedicated->modified = qfalse;
 
@@ -4349,6 +4359,9 @@ void Com_Frame( qboolean noDelay ) {
 	}
 
 	SV_Frame( msec );
+#ifdef RELAY
+	RL_Frame( msec );
+#endif
 
 	// if "dedicated" has been modified, start up
 	// or shut down the client system.

@@ -433,6 +433,9 @@ void		SV_StateReset( void );
 int			SV_StateCreate( int owner );
 qboolean	SV_StateCanApply( int handle );
 qboolean	SV_StateApply( int handle );
+#ifdef RELAY
+qboolean	SV_StateRewind( int handle );
+#endif
 void		SV_StateFree( int handle );
 void		SV_StateFreeOwner( int owner );
 int			SV_StateOwner( int handle );
@@ -560,3 +563,8 @@ void SV_LoadFilters( const char *filename );
 const char *SV_RunFilters( const char *userinfo, const netadr_t *addr );
 void SV_AddFilter_f( void );
 void SV_AddFilterCmd_f( void );
+
+#ifdef RELAY
+// relay/rl_overlay.c: the other players of the remote server go into the snapshot of the local player
+void RL_AddSnapshotEntities( client_t *client, clientSnapshot_t *frame );
+#endif
